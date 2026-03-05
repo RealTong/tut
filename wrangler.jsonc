@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tut",
+  "compatibility_date": "2025-08-03",
+  "main": "./src/index.tsx",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tut",
+      "database_id": "de03c510-9879-45ef-888d-7cee224e26d7",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
