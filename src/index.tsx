@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { DashboardPage, loadDashboardData } from './dashboard'
+import { normalizeDashboardTheme, resolveDashboardLocale } from './dashboard-i18n'
 import { renderer } from './renderer'
 import {
   buildUsageFilters,
@@ -78,8 +79,11 @@ app.get('/health', (c) => {
 })
 
 app.get('/', async (c) => {
-  const data = await loadDashboardData(c.env.DB)
-  return c.render(<DashboardPage data={data} authEnabled={Boolean(c.env.INGEST_API_KEY)} />)
+  const url = new URL(c.req.url)
+  const locale = resolveDashboardLocale(url.searchParams.get('lang'), c.req.header('Accept-Language'))
+  const theme = normalizeDashboardTheme(url.searchParams.get('theme'))
+  const data = await loadDashboardData(c.env.DB, locale)
+  return c.render(<DashboardPage authEnabled={Boolean(c.env.INGEST_API_KEY)} data={data} locale={locale} theme={theme} />)
 })
 
 app.post('/api/v1/usage', async (c) => {

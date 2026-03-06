@@ -1,3 +1,10 @@
+import {
+  createDashboardFormatters,
+  getDashboardText,
+  type DashboardLocale,
+  type DashboardText,
+  type DashboardTheme,
+} from './dashboard-i18n'
 import type { D1DatabaseLike } from './usage'
 
 type RangeKey = '7d' | '30d' | '1y' | 'all'
@@ -70,6 +77,7 @@ type SummarySnapshot = {
 }
 
 type DashboardClientState = {
+  locale: DashboardLocale
   defaultRange: RangeKey
   defaultTab: TabKey
   fullDateAxis: DateAxisPoint[]
@@ -87,41 +95,17 @@ export type DashboardData = {
   clientState: DashboardClientState
 }
 
+type DashboardFormatters = ReturnType<typeof createDashboardFormatters>
+
 const DEFAULT_RANGE: RangeKey = '30d'
 const DEFAULT_TAB: TabKey = 'performance'
 
-const rangeOptions: Array<{ key: RangeKey; label: string; days: number | null }> = [
-  { key: '7d', label: '7D', days: 7 },
-  { key: '30d', label: '30D', days: 30 },
-  { key: '1y', label: '1Y', days: 365 },
-  { key: 'all', label: 'ALL', days: null },
+const rangeOptions: Array<{ key: RangeKey; days: number | null }> = [
+  { key: '7d', days: 7 },
+  { key: '30d', days: 30 },
+  { key: '1y', days: 365 },
+  { key: 'all', days: null },
 ]
-
-const compactNumber = new Intl.NumberFormat('en-US', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-})
-
-const percentNumber = new Intl.NumberFormat('en-US', {
-  style: 'percent',
-  maximumFractionDigits: 1,
-})
-
-const shortDate = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-})
-
-const longDate = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-})
-
-const microDate = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-})
 
 const sourceDisplayNames: Record<string, string> = {
   claude: 'Claude',
@@ -137,9 +121,12 @@ const sourceColors: Record<string, string> = {
   droid: '#8ea89f',
 }
 
-export async function loadDashboardData(db?: D1DatabaseLike): Promise<DashboardData> {
+export async function loadDashboardData(db: D1DatabaseLike | undefined, locale: DashboardLocale): Promise<DashboardData> {
+  const formatters = createDashboardFormatters(locale)
+  const text = formatters.text
+
   if (!db) {
-    return emptyDashboardData(false)
+    return emptyDashboardData(false, locale)
   }
 
   const sourceDailySql = `
@@ -176,7 +163,7 @@ export async function loadDashboardData(db?: D1DatabaseLike): Promise<DashboardD
       db.prepare(modelDailySql).all<ModelDailyRow>(),
     ])
   } catch {
-    return emptyDashboardData(false)
+    return emptyDashboardData(false, locale)
   }
 
   const sourceDailyRows = (sourceDailyResult.results ?? []).map((row) => ({
@@ -190,15 +177,15 @@ export async function loadDashboardData(db?: D1DatabaseLike): Promise<DashboardD
   }))
 
   if (sourceDailyRows.length === 0) {
-    return emptyDashboardData(true)
+    return emptyDashboardData(true, locale)
   }
 
   const dateBounds = getDateBounds(sourceDailyRows)
   if (!dateBounds) {
-    return emptyDashboardData(true)
+    return emptyDashboardData(true, locale)
   }
 
-  const fullDateAxis = buildDateAxis(dateBounds.startDate, dateBounds.endDate)
+  const fullDateAxis = buildDateAxis(dateBounds.startDate, dateBounds.endDate, formatters.shortDate)
   const fullSourceSeries = buildSourceSeries(fullDateAxis, sourceDailyRows)
   const modelDaily = (modelDailyResult.results ?? []).map((row) => ({
     date: row.date,
@@ -208,6 +195,7 @@ export async function loadDashboardData(db?: D1DatabaseLike): Promise<DashboardD
   }))
 
   const clientState: DashboardClientState = {
+    locale,
     defaultRange: DEFAULT_RANGE,
     defaultTab: DEFAULT_TAB,
     fullDateAxis,
@@ -228,7 +216,9 @@ export async function loadDashboardData(db?: D1DatabaseLike): Promise<DashboardD
   }
 }
 
-function emptyDashboardData(configured: boolean): DashboardData {
+function emptyDashboardData(configured: boolean, locale: DashboardLocale): DashboardData {
+  const text = getDashboardText(locale)
+
   return {
     configured,
     empty: true,
@@ -242,13 +232,14 @@ function emptyDashboardData(configured: boolean): DashboardData {
       firstEventAt: null,
       lastEventAt: null,
       cacheRatio: 0,
-      peakDayLabel: 'No data',
+      peakDayLabel: text.noData,
       peakDayTokens: 0,
     },
     dateAxis: [],
     sourceSeries: [],
     topModels: [],
     clientState: {
+      locale,
       defaultRange: DEFAULT_RANGE,
       defaultTab: DEFAULT_TAB,
       fullDateAxis: [],
@@ -274,7 +265,7 @@ function getDateBounds(rows: SourceDailyRow[]) {
   return { startDate, endDate }
 }
 
-function buildDateAxis(startDate: string, endDate: string): DateAxisPoint[] {
+function buildDateAxis(startDate: string, endDate: string, shortDate: Intl.DateTimeFormat): DateAxisPoint[] {
   const axis: DateAxisPoint[] = []
   const current = parseUtcDate(startDate)
   const end = parseUtcDate(endDate)
@@ -452,30 +443,8 @@ function parseUtcDate(value: string) {
   return new Date(`${value}T00:00:00Z`)
 }
 
-function formatCompact(value: number) {
-  return compactNumber.format(value)
-}
-
-function formatPercent(value: number) {
-  return percentNumber.format(value)
-}
-
-function formatDate(value: string | null) {
-  if (!value) return 'No data yet'
-  const date = parseUtcDate(value)
-  if (Number.isNaN(date.valueOf())) return value
-  return longDate.format(date)
-}
-
-function formatMicroDate(value: string | null) {
-  if (!value) return 'No data'
-  const date = parseUtcDate(value)
-  if (Number.isNaN(date.valueOf())) return value
-  return microDate.format(date)
-}
-
-function rangeLabel(range: RangeKey) {
-  return rangeOptions.find((option) => option.key === range)?.label ?? range.toUpperCase()
+function rangeLabel(range: RangeKey, text: DashboardText) {
+  return text.rangeLabels[range] ?? range.toUpperCase()
 }
 
 function buildLinePath(points: SourceSeriesPoint[], maximum: number, padLeft: number, padTop: number, innerWidth: number, innerHeight: number) {
@@ -513,33 +482,26 @@ function RailSection({
 }
 
 function StatTile({
+  label,
   metric,
   note,
   value,
 }: {
+  label: string
   metric: 'totalTokens' | 'activeSources' | 'peakDayTokens' | 'cacheRatio' | 'inputTokens' | 'outputTokens'
   note: string
   value: string
 }) {
-  const labels: Record<typeof metric, string> = {
-    totalTokens: 'Total tokens',
-    activeSources: 'Active agents',
-    peakDayTokens: 'Peak burst',
-    cacheRatio: 'Cache share',
-    inputTokens: 'Input lane',
-    outputTokens: 'Output lane',
-  }
-
   return (
     <article class="metric-tile" data-metric-tile={metric}>
-      <span>{labels[metric]}</span>
+      <span>{label}</span>
       <strong data-metric-value>{value}</strong>
       <small data-metric-note>{note}</small>
     </article>
   )
 }
 
-function RangeSwitch({ activeRange }: { activeRange: RangeKey }) {
+function RangeSwitch({ activeRange, text }: { activeRange: RangeKey; text: DashboardText }) {
   return (
     <div class="range-switch" data-range-switch>
       {rangeOptions.map((option) => (
@@ -549,7 +511,7 @@ function RangeSwitch({ activeRange }: { activeRange: RangeKey }) {
           data-range-key={option.key}
           type="button"
         >
-          {option.label}
+          {text.rangeLabels[option.key]}
         </button>
       ))}
     </div>
@@ -558,12 +520,16 @@ function RangeSwitch({ activeRange }: { activeRange: RangeKey }) {
 
 function AgentTrendChart({
   dateAxis,
+  formatters,
   sourceSeries,
   activeRange,
+  text,
 }: {
   dateAxis: DateAxisPoint[]
+  formatters: DashboardFormatters
   sourceSeries: SourceSeries[]
   activeRange: RangeKey
+  text: DashboardText
 }) {
   const chartWidth = 920
   const chartHeight = 400
@@ -580,17 +546,17 @@ function AgentTrendChart({
     <section class="chart-panel panel--chart" data-tab-panel="performance">
       <div class="panel-head panel-head--chart">
         <div>
-          <p class="panel-kicker">Performance</p>
-          <h2>Net token flow</h2>
-          <p class="panel-note">Hover the plot for day detail. Use source chips to hide lines and legend to isolate one line.</p>
+          <p class="panel-kicker">{text.chart.kicker}</p>
+          <h2>{text.chart.title}</h2>
+          <p class="panel-note">{text.chart.note}</p>
         </div>
         <div class="chart-summary">
-          <span>Window / mode</span>
+          <span>{text.labels.windowMode}</span>
           <strong data-chart-range-label>
-            {rangeLabel(activeRange)} / Daily
+            {rangeLabel(activeRange, text)} / {text.labels.daily}
           </strong>
           <small data-chart-range-window>
-            {dateAxis[0]?.shortLabel ?? 'No data'} to {dateAxis[dateAxis.length - 1]?.shortLabel ?? 'No data'}
+            {dateAxis[0]?.shortLabel ?? text.noData} {text.labels.rangeConnector} {dateAxis[dateAxis.length - 1]?.shortLabel ?? text.noData}
           </small>
         </div>
       </div>
@@ -603,14 +569,14 @@ function AgentTrendChart({
                 <i class="chart-legend__dot" style={`background:${series.color}`} />
                 {series.label}
               </span>
-              <strong>{formatCompact(series.totalTokens)}</strong>
+              <strong>{formatters.formatCompact(series.totalTokens)}</strong>
             </button>
           </li>
         ))}
       </ul>
 
       <div
-        aria-label="Interactive line chart showing token usage by agent across time"
+        aria-label={text.chart.aria}
         class="chart-shell"
         data-chart-root="true"
         data-chart-height={String(chartHeight)}
@@ -630,7 +596,7 @@ function AgentTrendChart({
                 <g key={ratio}>
                   <line class="trend-grid" x1={padLeft} x2={chartWidth - padRight} y1={y} y2={y} />
                   <text class="trend-y-label" text-anchor="end" x={padLeft - 10} y={y + 4}>
-                    {formatCompact(maximum * ratio)}
+                    {formatters.formatCompact(maximum * ratio)}
                   </text>
                 </g>
               )
@@ -695,7 +661,7 @@ function AgentTrendChart({
         <div class="trend-tooltip" data-chart-tooltip hidden>
           <p class="trend-tooltip__date" data-chart-tooltip-date />
           <div class="trend-tooltip__total">
-            <span>Total</span>
+            <span>{text.labels.total}</span>
             <strong data-chart-tooltip-total />
           </div>
           <div class="trend-tooltip__series" data-chart-tooltip-series />
@@ -705,16 +671,26 @@ function AgentTrendChart({
   )
 }
 
-function SourceMixPanel({ sourceSeries, totalTokens }: { sourceSeries: SourceSeries[]; totalTokens: number }) {
+function SourceMixPanel({
+  formatters,
+  sourceSeries,
+  text,
+  totalTokens,
+}: {
+  formatters: DashboardFormatters
+  sourceSeries: SourceSeries[]
+  text: DashboardText
+  totalTokens: number
+}) {
   const nonZeroSeries = sourceSeries.filter((series) => series.totalTokens > 0)
 
   return (
     <section class="panel panel--source" data-tab-panel="performance mix">
       <div class="panel-head panel-head--compact">
         <div>
-          <p class="panel-kicker">Weight distribution</p>
-          <h2>Agent split</h2>
-          <p class="panel-note">Current range token share per visible source.</p>
+          <p class="panel-kicker">{text.sourceMix.kicker}</p>
+          <h2>{text.sourceMix.title}</h2>
+          <p class="panel-note">{text.sourceMix.note}</p>
         </div>
       </div>
 
@@ -728,12 +704,12 @@ function SourceMixPanel({ sourceSeries, totalTokens }: { sourceSeries: SourceSer
                   <i class="source-list__dot" style={`background:${series.color}`} />
                   {series.label}
                 </span>
-                <strong>{formatCompact(series.totalTokens)}</strong>
+                <strong>{formatters.formatCompact(series.totalTokens)}</strong>
               </div>
               <div class="source-list__meter">
                 <span class="source-list__fill" style={`width:${Math.max(share * 100, 2).toFixed(2)}%; background:${series.color}`} />
               </div>
-              <span class="source-list__share">{formatPercent(share)}</span>
+              <span class="source-list__share">{formatters.formatPercent(share)}</span>
             </li>
           )
         })}
@@ -743,17 +719,21 @@ function SourceMixPanel({ sourceSeries, totalTokens }: { sourceSeries: SourceSer
 }
 
 function ModelPanel({
+  formatters,
   topModels,
   summary,
+  text,
 }: {
+  formatters: DashboardFormatters
   topModels: ModelRank[]
   summary: SummarySnapshot
+  text: DashboardText
 }) {
   const tokenMix = [
-    { label: 'Input', value: summary.inputTokens },
-    { label: 'Output', value: summary.outputTokens },
-    { label: 'Cache read', value: summary.cacheReadTokens },
-    { label: 'Cache write', value: summary.cacheWriteTokens },
+    { label: text.labels.input, value: summary.inputTokens },
+    { label: text.labels.output, value: summary.outputTokens },
+    { label: text.labels.cacheRead, value: summary.cacheReadTokens },
+    { label: text.labels.cacheWrite, value: summary.cacheWriteTokens },
   ]
 
   const maxMixValue = Math.max(...tokenMix.map((item) => item.value), 1)
@@ -762,9 +742,9 @@ function ModelPanel({
     <section class="panel panel--models" data-tab-panel="performance models">
       <div class="panel-head panel-head--compact">
         <div>
-          <p class="panel-kicker">Model matrix</p>
-          <h2>Observed leaders</h2>
-          <p class="panel-note">Most active models for the current range and visible source set.</p>
+          <p class="panel-kicker">{text.models.kicker}</p>
+          <h2>{text.models.title}</h2>
+          <p class="panel-note">{text.models.note}</p>
         </div>
       </div>
 
@@ -772,9 +752,9 @@ function ModelPanel({
         <table class="data-table">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Model</th>
-              <th>Tokens</th>
+              <th>{text.models.rank}</th>
+              <th>{text.models.model}</th>
+              <th>{text.models.tokens}</th>
             </tr>
           </thead>
           <tbody data-model-table-body>
@@ -782,7 +762,7 @@ function ModelPanel({
               <tr key={`${model.label}-${index}`}>
                 <td>{String(index + 1).padStart(2, '0')}</td>
                 <td>{model.label}</td>
-                <td>{formatCompact(model.totalTokens)}</td>
+                <td>{formatters.formatCompact(model.totalTokens)}</td>
               </tr>
             ))}
           </tbody>
@@ -794,7 +774,7 @@ function ModelPanel({
           <article key={item.label}>
             <div class="token-mix__head">
               <span>{item.label}</span>
-              <strong>{formatCompact(item.value)}</strong>
+              <strong>{formatters.formatCompact(item.value)}</strong>
             </div>
             <div class="token-mix__meter">
               <span class="token-mix__fill" style={`width:${((item.value / maxMixValue) * 100).toFixed(2)}%`} />
@@ -808,70 +788,158 @@ function ModelPanel({
 
 function DashboardStateScript({ state }: { state: DashboardClientState }) {
   const serialized = JSON.stringify(state).replace(/</g, '\\u003c')
+  return <script dangerouslySetInnerHTML={{ __html: serialized }} id="dashboard-state" type="application/json" />
+}
+
+function DashboardChromeScript({ locale, theme }: { locale: DashboardLocale; theme: DashboardTheme }) {
+  const htmlLang = getDashboardText(locale).htmlLang
+  const code = `(function(){document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.lang=${JSON.stringify(htmlLang)};})();`
+  return <script dangerouslySetInnerHTML={{ __html: code }} />
+}
+
+function PreferenceSwitch({
+  current,
+  label,
+  links,
+}: {
+  current: string
+  label: string
+  links: Array<{ href: string; key: string; label: string }>
+}) {
   return (
-    <script id="dashboard-state" type="application/json">
-      {serialized}
-    </script>
+    <div class="toolbar-switch">
+      <span>{label}</span>
+      <div class="toolbar-switch__group">
+        {links.map((link) => (
+          <a class={link.key === current ? 'is-active' : ''} href={link.href}>
+            {link.label}
+          </a>
+        ))}
+      </div>
+    </div>
   )
 }
 
-function EmptyState({ configured, authEnabled }: { configured: boolean; authEnabled: boolean }) {
-  return (
-    <main class="console console--empty">
-      <section class="empty-state">
-        <div class="empty-state__copy">
-          <p class="masthead__eyebrow">agent token telemetry</p>
-          <h1>TUT MONITOR</h1>
-          <p class="empty-state__summary">
-            {configured
-              ? 'The ingest API is ready, but there is no token history to render yet. Send usage from your local agents and the chart will populate.'
-              : 'This worker cannot read the D1 binding yet. Check the database binding and run the migrations before expecting charts.'}
-          </p>
-        </div>
+function buildPreferenceLinks(locale: DashboardLocale, theme: DashboardTheme) {
+  const text = getDashboardText(locale)
 
-        <div class="empty-state__meta">
-          <article>
-            <span>Ingest auth</span>
-            <strong>{authEnabled ? 'Configured' : 'Missing'}</strong>
-          </article>
-          <article>
-            <span>Layout</span>
-            <strong>Single screen</strong>
-          </article>
-          <article>
-            <span>Next step</span>
-            <strong>Run local sync</strong>
-          </article>
-        </div>
-      </section>
-    </main>
+  const buildHref = (nextLocale: DashboardLocale, nextTheme: DashboardTheme) => {
+    const params = new URLSearchParams()
+    if (nextLocale !== 'en') {
+      params.set('lang', nextLocale)
+    }
+    if (nextTheme !== 'light') {
+      params.set('theme', nextTheme)
+    }
+
+    const query = params.toString()
+    return query ? `/?${query}` : '/'
+  }
+
+  return {
+    themeLinks: (Object.keys(text.themeOptions) as DashboardTheme[]).map((key) => ({
+      key,
+      label: text.themeOptions[key],
+      href: buildHref(locale, key),
+    })),
+    localeLinks: (Object.keys(text.languageOptions) as DashboardLocale[]).map((key) => ({
+      key,
+      label: text.languageOptions[key],
+      href: buildHref(key, theme),
+    })),
+  }
+}
+
+function EmptyState({
+  configured,
+  authEnabled,
+  locale,
+  theme,
+}: {
+  configured: boolean
+  authEnabled: boolean
+  locale: DashboardLocale
+  theme: DashboardTheme
+}) {
+  const text = getDashboardText(locale)
+  const { themeLinks, localeLinks } = buildPreferenceLinks(locale, theme)
+
+  return (
+    <>
+      <DashboardChromeScript locale={locale} theme={theme} />
+      <main class="console console--empty">
+        <section class="empty-state">
+          <div class="topline topline--empty">
+            <div class="topline__controls">
+              <PreferenceSwitch current={theme} label={text.labels.theme} links={themeLinks} />
+              <PreferenceSwitch current={locale} label={text.labels.language} links={localeLinks} />
+            </div>
+          </div>
+          <div class="empty-state__copy">
+            <p class="masthead__eyebrow">{text.brandEyebrow}</p>
+            <h1>{text.title}</h1>
+            <p class="empty-state__summary">{configured ? text.emptyState.configured : text.emptyState.unconfigured}</p>
+          </div>
+
+          <div class="empty-state__meta">
+            <article>
+              <span>{text.labels.ingestAuth}</span>
+              <strong>{authEnabled ? text.labels.configured : text.labels.missing}</strong>
+            </article>
+            <article>
+              <span>{text.labels.layout}</span>
+              <strong>{text.labels.singleScreen}</strong>
+            </article>
+            <article>
+              <span>{text.labels.nextStep}</span>
+              <strong>{text.labels.runLocalSync}</strong>
+            </article>
+          </div>
+        </section>
+      </main>
+    </>
   )
 }
 
-export function DashboardPage({ data, authEnabled }: { data: DashboardData; authEnabled: boolean }) {
+export function DashboardPage({
+  data,
+  authEnabled,
+  locale,
+  theme,
+}: {
+  data: DashboardData
+  authEnabled: boolean
+  locale: DashboardLocale
+  theme: DashboardTheme
+}) {
+  const formatters = createDashboardFormatters(locale)
+  const text = formatters.text
+  const { themeLinks, localeLinks } = buildPreferenceLinks(locale, theme)
+
   if (data.empty) {
-    return <EmptyState authEnabled={authEnabled} configured={data.configured} />
+    return <EmptyState authEnabled={authEnabled} configured={data.configured} locale={locale} theme={theme} />
   }
 
   const tokenChannels = [
-    { label: 'Input', value: data.summary.inputTokens },
-    { label: 'Output', value: data.summary.outputTokens },
-    { label: 'Cache read', value: data.summary.cacheReadTokens },
-    { label: 'Cache write', value: data.summary.cacheWriteTokens },
+    { label: text.labels.input, value: data.summary.inputTokens },
+    { label: text.labels.output, value: data.summary.outputTokens },
+    { label: text.labels.cacheRead, value: data.summary.cacheReadTokens },
+    { label: text.labels.cacheWrite, value: data.summary.cacheWriteTokens },
   ]
 
   const maxChannelValue = Math.max(...tokenChannels.map((item) => item.value), 1)
 
   return (
     <>
+      <DashboardChromeScript locale={locale} theme={theme} />
       <main class="console" data-dashboard-root="true">
         <aside class="console__rail">
           <div class="rail-topline">
-            <span>Signal routing</span>
+            <span>{text.railTopline}</span>
             <strong data-rail-count>{data.sourceSeries.length}</strong>
           </div>
 
-          <RailSection note="toggle visibility" title="Source selection">
+          <RailSection note={text.railNotes.toggleVisibility} title={text.railSections.sourceSelection}>
             <div class="agent-chip-grid" data-source-chip-grid>
               {data.sourceSeries.map((series) => (
                 <button
@@ -883,56 +951,56 @@ export function DashboardPage({ data, authEnabled }: { data: DashboardData; auth
                   type="button"
                 >
                   <span>{series.label}</span>
-                  <strong>{formatCompact(series.totalTokens)}</strong>
+                  <strong>{formatters.formatCompact(series.totalTokens)}</strong>
                 </button>
               ))}
             </div>
           </RailSection>
 
-          <RailSection note="selection aware" title="System state">
+          <RailSection note={text.railNotes.selectionAware} title={text.railSections.systemState}>
             <div class="rail-stat-grid">
               <article>
-                <span>Ingest auth</span>
-                <strong>{authEnabled ? 'ARMED' : 'LOCKED'}</strong>
+                <span>{text.labels.ingestAuth}</span>
+                <strong>{authEnabled ? text.labels.armed : text.labels.locked}</strong>
               </article>
               <article>
-                <span>Active agents</span>
+                <span>{text.metrics.activeSources}</span>
                 <strong data-summary-active-sources>{data.summary.activeSources}</strong>
               </article>
               <article>
-                <span>First seen</span>
-                <strong data-summary-first-seen>{formatMicroDate(data.summary.firstEventAt)}</strong>
+                <span>{text.labels.firstSeen}</span>
+                <strong data-summary-first-seen>{formatters.formatMicroDate(data.summary.firstEventAt)}</strong>
               </article>
               <article>
-                <span>Last event</span>
-                <strong data-summary-last-event>{formatMicroDate(data.summary.lastEventAt)}</strong>
+                <span>{text.labels.lastEvent}</span>
+                <strong data-summary-last-event>{formatters.formatMicroDate(data.summary.lastEventAt)}</strong>
               </article>
             </div>
           </RailSection>
 
-          <RailSection note="selection aware" title="Cache profile">
+          <RailSection note={text.railNotes.selectionAware} title={text.railSections.cacheProfile}>
             <div class="signal-meter">
               <span data-cache-meter style={`width:${Math.max(data.summary.cacheRatio * 100, 2).toFixed(2)}%`} />
             </div>
             <div class="rail-line">
-              <span>Cache share</span>
-              <strong data-summary-cache-ratio>{formatPercent(data.summary.cacheRatio)}</strong>
+              <span>{text.metrics.cacheRatio}</span>
+              <strong data-summary-cache-ratio>{formatters.formatPercent(data.summary.cacheRatio)}</strong>
             </div>
             <div class="rail-line">
-              <span>Peak burst</span>
+              <span>{text.metrics.peakDayTokens}</span>
               <strong data-summary-peak-line>
-                {formatCompact(data.summary.peakDayTokens)} / {data.summary.peakDayLabel}
+                {formatters.formatCompact(data.summary.peakDayTokens)} / {data.summary.peakDayLabel}
               </strong>
             </div>
           </RailSection>
 
-          <RailSection note="selection aware" title="Token channels">
+          <RailSection note={text.railNotes.selectionAware} title={text.railSections.tokenChannels}>
             <div class="channel-list" data-channel-list>
               {tokenChannels.map((item) => (
                 <article class="channel-row" key={item.label}>
                   <div class="channel-row__head">
                     <span>{item.label}</span>
-                    <strong>{formatCompact(item.value)}</strong>
+                    <strong>{formatters.formatCompact(item.value)}</strong>
                   </div>
                   <div class="channel-meter">
                     <span style={`width:${((item.value / maxChannelValue) * 100).toFixed(2)}%`} />
@@ -945,28 +1013,68 @@ export function DashboardPage({ data, authEnabled }: { data: DashboardData; auth
 
         <section class="console__main">
           <div class="topline">
-            <span>edge worker</span>
-            <span>{authEnabled ? 'ingest online' : 'auth missing'}</span>
+            <div class="topline__controls">
+              <PreferenceSwitch current={theme} label={text.labels.theme} links={themeLinks} />
+              <PreferenceSwitch current={locale} label={text.labels.language} links={localeLinks} />
+            </div>
+            <div class="topline__status">
+              <span>{text.labels.edgeWorker}</span>
+              <span>{authEnabled ? text.labels.ingestOnline : text.labels.authMissing}</span>
+            </div>
           </div>
 
           <header class="masthead">
             <div>
-              <p class="masthead__eyebrow">agent token telemetry</p>
-              <h1>TUT MONITOR</h1>
+              <p class="masthead__eyebrow">{text.brandEyebrow}</p>
+              <h1>{text.title}</h1>
             </div>
             <div class="masthead__meta">
-              <span data-range-meta>window: {rangeLabel(DEFAULT_RANGE)}</span>
-              <span data-latest-meta>latest: {formatDate(data.summary.lastEventAt)}</span>
+              <span data-range-meta>
+                {text.labels.window}: {rangeLabel(DEFAULT_RANGE, text)}
+              </span>
+              <span data-latest-meta>
+                {text.labels.latest}: {formatters.formatDate(data.summary.lastEventAt)}
+              </span>
             </div>
           </header>
 
           <section class="metric-strip" data-metric-strip>
-            <StatTile metric="totalTokens" note="all visible" value={formatCompact(data.summary.totalTokens)} />
-            <StatTile metric="activeSources" note="tracked lines" value={String(data.summary.activeSources)} />
-            <StatTile metric="peakDayTokens" note={data.summary.peakDayLabel} value={formatCompact(data.summary.peakDayTokens)} />
-            <StatTile metric="cacheRatio" note="read + write" value={formatPercent(data.summary.cacheRatio)} />
-            <StatTile metric="inputTokens" note="prompt volume" value={formatCompact(data.summary.inputTokens)} />
-            <StatTile metric="outputTokens" note="completion volume" value={formatCompact(data.summary.outputTokens)} />
+            <StatTile
+              label={text.metrics.totalTokens}
+              metric="totalTokens"
+              note={text.metricNotes.allVisible}
+              value={formatters.formatCompact(data.summary.totalTokens)}
+            />
+            <StatTile
+              label={text.metrics.activeSources}
+              metric="activeSources"
+              note={text.metricNotes.trackedLines}
+              value={String(data.summary.activeSources)}
+            />
+            <StatTile
+              label={text.metrics.peakDayTokens}
+              metric="peakDayTokens"
+              note={data.summary.peakDayLabel}
+              value={formatters.formatCompact(data.summary.peakDayTokens)}
+            />
+            <StatTile
+              label={text.metrics.cacheRatio}
+              metric="cacheRatio"
+              note={text.metricNotes.readWrite}
+              value={formatters.formatPercent(data.summary.cacheRatio)}
+            />
+            <StatTile
+              label={text.metrics.inputTokens}
+              metric="inputTokens"
+              note={text.metricNotes.promptVolume}
+              value={formatters.formatCompact(data.summary.inputTokens)}
+            />
+            <StatTile
+              label={text.metrics.outputTokens}
+              metric="outputTokens"
+              note={text.metricNotes.completionVolume}
+              value={formatters.formatCompact(data.summary.outputTokens)}
+            />
           </section>
 
           <section class="workspace">
@@ -974,31 +1082,37 @@ export function DashboardPage({ data, authEnabled }: { data: DashboardData; auth
               <div class="workspace-toolbar">
                 <nav class="workspace-tabs" aria-label="Dashboard modes">
                   <button class="is-active" data-tab-key="performance" type="button">
-                    Performance
+                    {text.tabs.performance}
                   </button>
                   <button data-tab-key="mix" type="button">
-                    Mix
+                    {text.tabs.mix}
                   </button>
                   <button data-tab-key="models" type="button">
-                    Models
+                    {text.tabs.models}
                   </button>
                 </nav>
-                <RangeSwitch activeRange={DEFAULT_RANGE} />
+                <RangeSwitch activeRange={DEFAULT_RANGE} text={text} />
               </div>
               <p class="workspace-caption" data-workspace-caption>
-                Daily token flow · hover chart for source detail
+                {text.tabCaptions.performance}
               </p>
             </div>
 
             <div class="workspace-grid" data-active-tab={DEFAULT_TAB} data-workspace-grid>
-              <AgentTrendChart activeRange={DEFAULT_RANGE} dateAxis={data.dateAxis} sourceSeries={data.sourceSeries} />
-              <SourceMixPanel sourceSeries={data.sourceSeries} totalTokens={data.summary.totalTokens} />
-              <ModelPanel summary={data.summary} topModels={data.topModels} />
+              <AgentTrendChart
+                activeRange={DEFAULT_RANGE}
+                dateAxis={data.dateAxis}
+                formatters={formatters}
+                sourceSeries={data.sourceSeries}
+                text={text}
+              />
+              <SourceMixPanel formatters={formatters} sourceSeries={data.sourceSeries} text={text} totalTokens={data.summary.totalTokens} />
+              <ModelPanel formatters={formatters} summary={data.summary} text={text} topModels={data.topModels} />
             </div>
           </section>
 
           <footer class="console__footer" data-console-footer>
-            Data: Cloudflare D1 / usage_events · last event {formatDate(data.summary.lastEventAt)}
+            {text.labels.dataSource} · {text.labels.lastEventPrefix} {formatters.formatDate(data.summary.lastEventAt)}
           </footer>
         </section>
       </main>
