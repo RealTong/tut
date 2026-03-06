@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { DashboardPage, loadDashboardData } from './dashboard'
 import { renderer } from './renderer'
 import {
   buildUsageFilters,
@@ -14,6 +15,7 @@ import {
 
 interface TutBindings {
   DB?: D1DatabaseLike
+  INGEST_API_KEY?: string
 }
 
 type AppEnv = {
@@ -66,29 +68,29 @@ app.use('/api/*', cors())
 app.use(renderer)
 
 app.get('/health', (c) => {
-  return c.json({ ok: true, service: 'tut' })
+  return c.json({
+    ok: true,
+    service: 'tut',
+    auth: {
+      ingestConfigured: Boolean(c.env.INGEST_API_KEY),
+    },
+  })
 })
 
-app.get('/', (c) => {
-  return c.render(
-    <main style={{ padding: '24px', maxWidth: '760px', margin: '0 auto' }}>
-      <h1>tut</h1>
-      <p>Token usage tracker API for coding agents.</p>
-      <ul>
-        <li><code>POST /api/v1/usage</code> - ingest usage events</li>
-        <li><code>GET /api/v1/usage</code> - list events with filters</li>
-        <li><code>GET /api/v1/usage/summary</code> - total usage</li>
-        <li><code>GET /api/v1/usage/breakdown</code> - grouped aggregation</li>
-        <li><code>GET /api/v1/usage/dimensions</code> - top sources/providers/models</li>
-      </ul>
-    </main>,
-  )
+app.get('/', async (c) => {
+  const data = await loadDashboardData(c.env.DB)
+  return c.render(<DashboardPage data={data} authEnabled={Boolean(c.env.INGEST_API_KEY)} />)
 })
 
 app.post('/api/v1/usage', async (c) => {
   const db = c.env.DB
   if (!db) {
     return c.json({ error: 'D1 binding "DB" is not configured.' }, 500)
+  }
+
+  const authError = validateIngestAuth(c.req.raw, c.env.INGEST_API_KEY)
+  if (authError) {
+    return c.json(authError.body, authError.status)
   }
 
   let body: unknown
@@ -434,5 +436,35 @@ app.get('/api/v1/usage/dimensions', async (c) => {
     models: mapItems(models.results),
   })
 })
+
+function validateIngestAuth(request: Request, expectedApiKey?: string) {
+  if (!expectedApiKey) {
+    return {
+      status: 503 as const,
+      body: { error: 'Ingest auth is not configured. Set the INGEST_API_KEY Worker secret.' },
+    }
+  }
+
+  const providedApiKey = extractProvidedApiKey(request)
+  if (!providedApiKey || providedApiKey !== expectedApiKey) {
+    return {
+      status: 401 as const,
+      body: { error: 'Unauthorized. Provide a valid Bearer token or x-api-key.' },
+    }
+  }
+
+  return null
+}
+
+function extractProvidedApiKey(request: Request): string | null {
+  const bearerHeader = request.headers.get('authorization')
+  if (bearerHeader?.startsWith('Bearer ')) {
+    const token = bearerHeader.slice(7).trim()
+    return token || null
+  }
+
+  const apiKeyHeader = request.headers.get('x-api-key')?.trim()
+  return apiKeyHeader || null
+}
 
 export default app
