@@ -21,6 +21,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html {
   background:
     radial-gradient(circle at 18% 12%, rgba(124, 150, 118, 0.1), transparent 28%),
@@ -210,6 +214,7 @@ code {
 }
 
 .agent-chip {
+  appearance: none;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -220,6 +225,13 @@ code {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
     rgba(255, 255, 255, 0.015);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    opacity 140ms ease,
+    background-color 140ms ease;
 }
 
 .agent-chip span {
@@ -231,6 +243,21 @@ code {
 .agent-chip strong {
   color: color-mix(in srgb, var(--chip-color) 72%, var(--accent));
   font-size: 0.76rem;
+}
+
+.agent-chip:hover {
+  border-color: color-mix(in srgb, var(--chip-color) 38%, var(--line-strong));
+}
+
+.agent-chip.is-hidden {
+  opacity: 0.38;
+}
+
+.agent-chip.is-focus {
+  border-color: color-mix(in srgb, var(--chip-color) 58%, var(--accent));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+    rgba(255, 255, 255, 0.03);
 }
 
 .rail-stat-grid {
@@ -427,6 +454,13 @@ code {
   gap: 1rem;
 }
 
+.workspace-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
 .workspace-tabs {
   display: flex;
   gap: 1.2rem;
@@ -434,9 +468,20 @@ code {
   font-size: 0.78rem;
 }
 
-.workspace-tabs span {
+.workspace-tabs button {
+  appearance: none;
   position: relative;
-  padding-bottom: 0.42rem;
+  padding: 0 0 0.42rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.workspace-tabs span,
+.workspace-tabs button {
+  position: relative;
 }
 
 .workspace-tabs .is-active {
@@ -459,12 +504,61 @@ code {
   font-size: 0.68rem;
 }
 
+.range-switch {
+  display: inline-flex;
+  gap: 0.36rem;
+  padding: 0.18rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.range-switch button {
+  appearance: none;
+  min-width: 3.2rem;
+  padding: 0.42rem 0.58rem;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 1px);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font: 500 0.68rem 'IBM Plex Mono', monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background-color 140ms ease;
+}
+
+.range-switch button:hover {
+  color: var(--text-dim);
+}
+
+.range-switch button.is-active {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--accent);
+}
+
 .workspace-grid {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.52fr) minmax(19rem, 0.9fr);
   grid-template-rows: minmax(0, 1fr) minmax(0, 0.9fr);
   gap: 0.85rem;
+}
+
+.workspace-grid[data-active-tab='mix'],
+.workspace-grid[data-active-tab='models'] {
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.workspace-grid[data-active-tab='mix'] .panel--source,
+.workspace-grid[data-active-tab='models'] .panel--models {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .chart-panel,
@@ -572,7 +666,12 @@ code {
   gap: 0.42rem;
 }
 
+.chart-legend li {
+  list-style: none;
+}
+
 .chart-legend__item {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 0.58rem;
@@ -580,6 +679,12 @@ code {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.015);
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    opacity 140ms ease,
+    background-color 140ms ease;
 }
 
 .chart-legend__label {
@@ -594,6 +699,19 @@ code {
   color: var(--accent);
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.72rem;
+}
+
+.chart-legend__item:hover {
+  border-color: var(--line-strong);
+}
+
+.chart-legend__item.is-focus {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.chart-legend__item.is-hidden {
+  opacity: 0.38;
 }
 
 .chart-legend__dot,
@@ -720,6 +838,10 @@ code {
 .trend-tooltip__row {
   color: var(--text-dim);
   font-size: 0.74rem;
+}
+
+.trend-tooltip__row.is-focus {
+  color: var(--accent);
 }
 
 .trend-tooltip__label,
@@ -951,6 +1073,12 @@ code {
   }
 
   .workspace__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .workspace-toolbar {
+    width: 100%;
     flex-direction: column;
     align-items: flex-start;
   }

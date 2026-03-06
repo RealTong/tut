@@ -1,24 +1,22 @@
 import type { D1DatabaseLike } from './usage'
 
-type SummaryRow = {
-  active_sources: number
+type RangeKey = '7d' | '30d' | '1y' | 'all'
+type TabKey = 'performance' | 'mix' | 'models'
+
+type SourceDailyRow = {
+  date: string
+  source: string
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
   cache_write_tokens: number
   total_tokens: number
-  first_event_at: string | null
-  last_event_at: string | null
 }
 
-type SourceDailyRow = {
+type ModelDailyRow = {
   date: string
   source: string
-  total_tokens: number
-}
-
-type RankRow = {
-  label: string
+  model: string
   total_tokens: number
 }
 
@@ -30,6 +28,10 @@ type DateAxisPoint = {
 type SourceSeriesPoint = {
   date: string
   shortLabel: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
   totalTokens: number
 }
 
@@ -41,50 +43,59 @@ type SourceSeries = {
   points: SourceSeriesPoint[]
 }
 
+type ModelPoint = {
+  date: string
+  source: string
+  model: string
+  totalTokens: number
+}
+
 type ModelRank = {
   label: string
   totalTokens: number
 }
 
-type ChartPayload = {
-  chartWidth: number
-  chartHeight: number
-  padLeft: number
-  padRight: number
-  padTop: number
-  padBottom: number
-  maximum: number
-  dateAxis: DateAxisPoint[]
-  sourceSeries: Array<{
-    source: string
-    label: string
-    color: string
-    points: Array<{
-      totalTokens: number
-    }>
-  }>
+type SummarySnapshot = {
+  activeSources: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalTokens: number
+  firstEventAt: string | null
+  lastEventAt: string | null
+  cacheRatio: number
+  peakDayLabel: string
+  peakDayTokens: number
+}
+
+type DashboardClientState = {
+  defaultRange: RangeKey
+  defaultTab: TabKey
+  fullDateAxis: DateAxisPoint[]
+  sourceSeries: SourceSeries[]
+  modelDaily: ModelPoint[]
 }
 
 export type DashboardData = {
   configured: boolean
   empty: boolean
-  summary: {
-    activeSources: number
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    cacheWriteTokens: number
-    totalTokens: number
-    firstEventAt: string | null
-    lastEventAt: string | null
-    cacheRatio: number
-    peakDayLabel: string
-    peakDayTokens: number
-  }
+  summary: SummarySnapshot
   dateAxis: DateAxisPoint[]
   sourceSeries: SourceSeries[]
   topModels: ModelRank[]
+  clientState: DashboardClientState
 }
+
+const DEFAULT_RANGE: RangeKey = '30d'
+const DEFAULT_TAB: TabKey = 'performance'
+
+const rangeOptions: Array<{ key: RangeKey; label: string; days: number | null }> = [
+  { key: '7d', label: '7D', days: 7 },
+  { key: '30d', label: '30D', days: 30 },
+  { key: '1y', label: '1Y', days: 365 },
+  { key: 'all', label: 'ALL', days: null },
+]
 
 const compactNumber = new Intl.NumberFormat('en-US', {
   notation: 'compact',
@@ -131,102 +142,89 @@ export async function loadDashboardData(db?: D1DatabaseLike): Promise<DashboardD
     return emptyDashboardData(false)
   }
 
-  const since = new Date(Date.now() - 27 * 24 * 60 * 60 * 1000).toISOString()
-
-  const summarySql = `
-    SELECT
-      COUNT(DISTINCT source) AS active_sources,
-      COALESCE(SUM(input_tokens), 0) AS input_tokens,
-      COALESCE(SUM(output_tokens), 0) AS output_tokens,
-      COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-      COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-      COALESCE(SUM(total_tokens), 0) AS total_tokens,
-      MIN(occurred_at) AS first_event_at,
-      MAX(occurred_at) AS last_event_at
-    FROM usage_events
-  `
-
   const sourceDailySql = `
     SELECT
       substr(occurred_at, 1, 10) AS date,
       source AS source,
+      COALESCE(SUM(input_tokens), 0) AS input_tokens,
+      COALESCE(SUM(output_tokens), 0) AS output_tokens,
+      COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+      COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
       COALESCE(SUM(total_tokens), 0) AS total_tokens
     FROM usage_events
-    WHERE occurred_at >= ?
     GROUP BY substr(occurred_at, 1, 10), source
-    ORDER BY date ASC, total_tokens DESC, source ASC
+    ORDER BY date ASC, source ASC
   `
 
-  const sourceRankSql = `
+  const modelDailySql = `
     SELECT
-      source AS label,
+      substr(occurred_at, 1, 10) AS date,
+      source AS source,
+      model AS model,
       COALESCE(SUM(total_tokens), 0) AS total_tokens
     FROM usage_events
-    GROUP BY source
-    ORDER BY total_tokens DESC, label ASC
-    LIMIT 12
+    GROUP BY substr(occurred_at, 1, 10), source, model
+    ORDER BY date ASC, source ASC, total_tokens DESC, model ASC
   `
 
-  const modelRankSql = `
-    SELECT
-      model AS label,
-      COALESCE(SUM(total_tokens), 0) AS total_tokens
-    FROM usage_events
-    GROUP BY model
-    ORDER BY total_tokens DESC, label ASC
-    LIMIT 5
-  `
-
-  let summary: SummaryRow | null
   let sourceDailyResult: { results?: SourceDailyRow[] }
-  let sourceRankResult: { results?: RankRow[] }
-  let modelRankResult: { results?: RankRow[] }
+  let modelDailyResult: { results?: ModelDailyRow[] }
 
   try {
-    ;[summary, sourceDailyResult, sourceRankResult, modelRankResult] = await Promise.all([
-      db.prepare(summarySql).first<SummaryRow>(),
-      db.prepare(sourceDailySql).bind(since).all<SourceDailyRow>(),
-      db.prepare(sourceRankSql).all<RankRow>(),
-      db.prepare(modelRankSql).all<RankRow>(),
+    ;[sourceDailyResult, modelDailyResult] = await Promise.all([
+      db.prepare(sourceDailySql).all<SourceDailyRow>(),
+      db.prepare(modelDailySql).all<ModelDailyRow>(),
     ])
   } catch {
     return emptyDashboardData(false)
   }
 
-  const totalTokens = Number(summary?.total_tokens ?? 0)
-  if (totalTokens === 0) {
+  const sourceDailyRows = (sourceDailyResult.results ?? []).map((row) => ({
+    date: row.date,
+    source: row.source,
+    input_tokens: Number(row.input_tokens ?? 0),
+    output_tokens: Number(row.output_tokens ?? 0),
+    cache_read_tokens: Number(row.cache_read_tokens ?? 0),
+    cache_write_tokens: Number(row.cache_write_tokens ?? 0),
+    total_tokens: Number(row.total_tokens ?? 0),
+  }))
+
+  if (sourceDailyRows.length === 0) {
     return emptyDashboardData(true)
   }
 
-  const dateAxis = buildDateAxis()
-  const sourceSeries = buildSourceSeries(dateAxis, sourceDailyResult.results ?? [], sourceRankResult.results ?? [])
-  const peakDay = findPeakDay(dateAxis, sourceSeries)
+  const dateBounds = getDateBounds(sourceDailyRows)
+  if (!dateBounds) {
+    return emptyDashboardData(true)
+  }
+
+  const fullDateAxis = buildDateAxis(dateBounds.startDate, dateBounds.endDate)
+  const fullSourceSeries = buildSourceSeries(fullDateAxis, sourceDailyRows)
+  const modelDaily = (modelDailyResult.results ?? []).map((row) => ({
+    date: row.date,
+    source: row.source,
+    model: row.model,
+    totalTokens: Number(row.total_tokens ?? 0),
+  }))
+
+  const clientState: DashboardClientState = {
+    defaultRange: DEFAULT_RANGE,
+    defaultTab: DEFAULT_TAB,
+    fullDateAxis,
+    sourceSeries: fullSourceSeries,
+    modelDaily,
+  }
+
+  const initialView = buildView(clientState, DEFAULT_RANGE, new Set(fullSourceSeries.map((series) => series.source)))
 
   return {
     configured: true,
-    empty: false,
-    summary: {
-      activeSources: Number(summary?.active_sources ?? 0),
-      inputTokens: Number(summary?.input_tokens ?? 0),
-      outputTokens: Number(summary?.output_tokens ?? 0),
-      cacheReadTokens: Number(summary?.cache_read_tokens ?? 0),
-      cacheWriteTokens: Number(summary?.cache_write_tokens ?? 0),
-      totalTokens,
-      firstEventAt: summary?.first_event_at ?? null,
-      lastEventAt: summary?.last_event_at ?? null,
-      cacheRatio:
-        totalTokens === 0
-          ? 0
-          : (Number(summary?.cache_read_tokens ?? 0) + Number(summary?.cache_write_tokens ?? 0)) / totalTokens,
-      peakDayLabel: peakDay ? peakDay.shortLabel : 'No data',
-      peakDayTokens: peakDay?.totalTokens ?? 0,
-    },
-    dateAxis,
-    sourceSeries,
-    topModels: (modelRankResult.results ?? []).map((row) => ({
-      label: row.label,
-      totalTokens: Number(row.total_tokens ?? 0),
-    })),
+    empty: initialView.summary.totalTokens === 0,
+    summary: initialView.summary,
+    dateAxis: initialView.dateAxis,
+    sourceSeries: initialView.sourceSeries,
+    topModels: initialView.topModels,
+    clientState,
   }
 }
 
@@ -247,79 +245,194 @@ function emptyDashboardData(configured: boolean): DashboardData {
       peakDayLabel: 'No data',
       peakDayTokens: 0,
     },
-    dateAxis: buildDateAxis(),
+    dateAxis: [],
     sourceSeries: [],
     topModels: [],
+    clientState: {
+      defaultRange: DEFAULT_RANGE,
+      defaultTab: DEFAULT_TAB,
+      fullDateAxis: [],
+      sourceSeries: [],
+      modelDaily: [],
+    },
   }
 }
 
-function buildDateAxis(): DateAxisPoint[] {
+function getDateBounds(rows: SourceDailyRow[]) {
+  if (rows.length === 0) {
+    return null
+  }
+
+  let startDate = rows[0].date
+  let endDate = rows[0].date
+
+  for (const row of rows) {
+    if (row.date < startDate) startDate = row.date
+    if (row.date > endDate) endDate = row.date
+  }
+
+  return { startDate, endDate }
+}
+
+function buildDateAxis(startDate: string, endDate: string): DateAxisPoint[] {
   const axis: DateAxisPoint[] = []
+  const current = parseUtcDate(startDate)
+  const end = parseUtcDate(endDate)
 
-  for (let offset = 27; offset >= 0; offset -= 1) {
-    const date = new Date()
-    date.setUTCHours(0, 0, 0, 0)
-    date.setUTCDate(date.getUTCDate() - offset)
-
+  while (current <= end) {
     axis.push({
-      date: date.toISOString().slice(0, 10),
-      shortLabel: shortDate.format(date),
+      date: current.toISOString().slice(0, 10),
+      shortLabel: shortDate.format(current),
     })
+    current.setUTCDate(current.getUTCDate() + 1)
   }
 
   return axis
 }
 
-function buildSourceSeries(dateAxis: DateAxisPoint[], rows: SourceDailyRow[], sourceRanks: RankRow[]): SourceSeries[] {
+function buildSourceSeries(dateAxis: DateAxisPoint[], rows: SourceDailyRow[]): SourceSeries[] {
   const sourceTotals = new Map<string, number>()
-  const valuesBySource = new Map<string, Map<string, number>>()
+  const valuesBySource = new Map<string, Map<string, SourceDailyRow>>()
 
   for (const row of rows) {
-    const source = row.source
-    const total = Number(row.total_tokens ?? 0)
-    sourceTotals.set(source, (sourceTotals.get(source) ?? 0) + total)
-
-    const dateMap = valuesBySource.get(source) ?? new Map<string, number>()
-    dateMap.set(row.date, total)
-    valuesBySource.set(source, dateMap)
+    sourceTotals.set(row.source, (sourceTotals.get(row.source) ?? 0) + row.total_tokens)
+    const dateMap = valuesBySource.get(row.source) ?? new Map<string, SourceDailyRow>()
+    dateMap.set(row.date, row)
+    valuesBySource.set(row.source, dateMap)
   }
 
-  const orderedSources = sourceRanks
-    .map((row) => row.label)
-    .filter((label) => sourceTotals.has(label))
-
-  for (const source of valuesBySource.keys()) {
-    if (!orderedSources.includes(source)) {
-      orderedSources.push(source)
-    }
-  }
+  const orderedSources = [...sourceTotals.entries()]
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1]
+      return left[0].localeCompare(right[0])
+    })
+    .map(([source]) => source)
 
   return orderedSources.map((source, index) => ({
     source,
     label: sourceDisplayNames[source] ?? toTitleCase(source),
     color: sourceColors[source] ?? fallbackColor(index),
     totalTokens: sourceTotals.get(source) ?? 0,
-    points: dateAxis.map((point) => ({
-      date: point.date,
-      shortLabel: point.shortLabel,
-      totalTokens: valuesBySource.get(source)?.get(point.date) ?? 0,
-    })),
+    points: dateAxis.map((point) => {
+      const row = valuesBySource.get(source)?.get(point.date)
+      return {
+        date: point.date,
+        shortLabel: point.shortLabel,
+        inputTokens: row?.input_tokens ?? 0,
+        outputTokens: row?.output_tokens ?? 0,
+        cacheReadTokens: row?.cache_read_tokens ?? 0,
+        cacheWriteTokens: row?.cache_write_tokens ?? 0,
+        totalTokens: row?.total_tokens ?? 0,
+      }
+    }),
   }))
 }
 
-function findPeakDay(dateAxis: DateAxisPoint[], sourceSeries: SourceSeries[]) {
-  const totals = dateAxis.map((point, index) => ({
-    date: point.date,
-    shortLabel: point.shortLabel,
-    totalTokens: sourceSeries.reduce((sum, series) => sum + (series.points[index]?.totalTokens ?? 0), 0),
-  }))
+function buildView(clientState: DashboardClientState, range: RangeKey, visibleSources: Set<string>) {
+  const dateAxis = sliceDateAxis(clientState.fullDateAxis, range)
+  const sourceSeries = sliceSourceSeries(clientState.sourceSeries, dateAxis.length).filter((series) => visibleSources.has(series.source))
+  const summary = computeSummary(sourceSeries)
+  const topModels = computeTopModels(clientState.modelDaily, new Set(dateAxis.map((point) => point.date)), visibleSources)
 
-  return totals.reduce<{ date: string; shortLabel: string; totalTokens: number } | null>((peak, point) => {
-    if (!peak || point.totalTokens > peak.totalTokens) {
-      return point
+  return { dateAxis, sourceSeries, summary, topModels }
+}
+
+function sliceDateAxis(dateAxis: DateAxisPoint[], range: RangeKey) {
+  const days = rangeOptions.find((option) => option.key === range)?.days ?? null
+  if (!days || days >= dateAxis.length) {
+    return [...dateAxis]
+  }
+  return dateAxis.slice(-days)
+}
+
+function sliceSourceSeries(sourceSeries: SourceSeries[], pointCount: number) {
+  if (pointCount <= 0) {
+    return sourceSeries.map((series) => ({ ...series, totalTokens: 0, points: [] }))
+  }
+
+  return sourceSeries.map((series) => {
+    const points = series.points.slice(-pointCount)
+    return {
+      ...series,
+      totalTokens: points.reduce((sum, point) => sum + point.totalTokens, 0),
+      points,
     }
-    return peak
-  }, null)
+  })
+}
+
+function computeSummary(sourceSeries: SourceSeries[]): SummarySnapshot {
+  let totalTokens = 0
+  let inputTokens = 0
+  let outputTokens = 0
+  let cacheReadTokens = 0
+  let cacheWriteTokens = 0
+  let firstEventAt: string | null = null
+  let lastEventAt: string | null = null
+
+  const perDay = new Map<string, number>()
+
+  for (const series of sourceSeries) {
+    for (const point of series.points) {
+      totalTokens += point.totalTokens
+      inputTokens += point.inputTokens
+      outputTokens += point.outputTokens
+      cacheReadTokens += point.cacheReadTokens
+      cacheWriteTokens += point.cacheWriteTokens
+
+      if (point.totalTokens > 0) {
+        if (!firstEventAt || point.date < firstEventAt) firstEventAt = point.date
+        if (!lastEventAt || point.date > lastEventAt) lastEventAt = point.date
+      }
+
+      perDay.set(point.date, (perDay.get(point.date) ?? 0) + point.totalTokens)
+    }
+  }
+
+  let peakDayLabel = 'No data'
+  let peakDayTokens = 0
+
+  for (const series of sourceSeries) {
+    for (const point of series.points) {
+      const total = perDay.get(point.date) ?? 0
+      if (total > peakDayTokens) {
+        peakDayTokens = total
+        peakDayLabel = point.shortLabel
+      }
+    }
+  }
+
+  return {
+    activeSources: sourceSeries.filter((series) => series.totalTokens > 0).length,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens,
+    firstEventAt,
+    lastEventAt,
+    cacheRatio: totalTokens === 0 ? 0 : (cacheReadTokens + cacheWriteTokens) / totalTokens,
+    peakDayLabel,
+    peakDayTokens,
+  }
+}
+
+function computeTopModels(modelDaily: ModelPoint[], rangeDates: Set<string>, visibleSources: Set<string>) {
+  const totals = new Map<string, number>()
+
+  for (const row of modelDaily) {
+    if (!rangeDates.has(row.date) || !visibleSources.has(row.source)) {
+      continue
+    }
+    totals.set(row.model, (totals.get(row.model) ?? 0) + row.totalTokens)
+  }
+
+  return [...totals.entries()]
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1]
+      return left[0].localeCompare(right[0])
+    })
+    .slice(0, 5)
+    .map(([label, totalTokens]) => ({ label, totalTokens }))
 }
 
 function toTitleCase(value: string) {
@@ -335,6 +448,10 @@ function fallbackColor(index: number) {
   return palette[index % palette.length]
 }
 
+function parseUtcDate(value: string) {
+  return new Date(`${value}T00:00:00Z`)
+}
+
 function formatCompact(value: number) {
   return compactNumber.format(value)
 }
@@ -345,16 +462,20 @@ function formatPercent(value: number) {
 
 function formatDate(value: string | null) {
   if (!value) return 'No data yet'
-  const date = new Date(value)
+  const date = parseUtcDate(value)
   if (Number.isNaN(date.valueOf())) return value
   return longDate.format(date)
 }
 
 function formatMicroDate(value: string | null) {
   if (!value) return 'No data'
-  const date = new Date(value)
+  const date = parseUtcDate(value)
   if (Number.isNaN(date.valueOf())) return value
   return microDate.format(date)
+}
+
+function rangeLabel(range: RangeKey) {
+  return rangeOptions.find((option) => option.key === range)?.label ?? range.toUpperCase()
 }
 
 function buildLinePath(points: SourceSeriesPoint[], maximum: number, padLeft: number, padTop: number, innerWidth: number, innerHeight: number) {
@@ -369,39 +490,6 @@ function buildLinePath(points: SourceSeriesPoint[], maximum: number, padLeft: nu
       return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`
     })
     .join(' ')
-}
-
-function buildChartPayload(
-  dateAxis: DateAxisPoint[],
-  sourceSeries: SourceSeries[],
-  maximum: number,
-  chartWidth: number,
-  chartHeight: number,
-  padLeft: number,
-  padRight: number,
-  padTop: number,
-  padBottom: number,
-) {
-  const payload: ChartPayload = {
-    chartWidth,
-    chartHeight,
-    padLeft,
-    padRight,
-    padTop,
-    padBottom,
-    maximum,
-    dateAxis,
-    sourceSeries: sourceSeries.map((series) => ({
-      source: series.source,
-      label: series.label,
-      color: series.color,
-      points: series.points.map((point) => ({
-        totalTokens: point.totalTokens,
-      })),
-    })),
-  }
-
-  return JSON.stringify(payload)
 }
 
 function RailSection({
@@ -424,17 +512,59 @@ function RailSection({
   )
 }
 
-function StatTile({ label, value, note }: { label: string; value: string; note?: string }) {
+function StatTile({
+  metric,
+  note,
+  value,
+}: {
+  metric: 'totalTokens' | 'activeSources' | 'peakDayTokens' | 'cacheRatio' | 'inputTokens' | 'outputTokens'
+  note: string
+  value: string
+}) {
+  const labels: Record<typeof metric, string> = {
+    totalTokens: 'Total tokens',
+    activeSources: 'Active agents',
+    peakDayTokens: 'Peak burst',
+    cacheRatio: 'Cache share',
+    inputTokens: 'Input lane',
+    outputTokens: 'Output lane',
+  }
+
   return (
-    <article class="metric-tile">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {note ? <small>{note}</small> : null}
+    <article class="metric-tile" data-metric-tile={metric}>
+      <span>{labels[metric]}</span>
+      <strong data-metric-value>{value}</strong>
+      <small data-metric-note>{note}</small>
     </article>
   )
 }
 
-function AgentTrendChart({ dateAxis, sourceSeries }: { dateAxis: DateAxisPoint[]; sourceSeries: SourceSeries[] }) {
+function RangeSwitch({ activeRange }: { activeRange: RangeKey }) {
+  return (
+    <div class="range-switch" data-range-switch>
+      {rangeOptions.map((option) => (
+        <button
+          aria-pressed={option.key === activeRange}
+          class={option.key === activeRange ? 'is-active' : ''}
+          data-range-key={option.key}
+          type="button"
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function AgentTrendChart({
+  dateAxis,
+  sourceSeries,
+  activeRange,
+}: {
+  dateAxis: DateAxisPoint[]
+  sourceSeries: SourceSeries[]
+  activeRange: RangeKey
+}) {
   const chartWidth = 920
   const chartHeight = 400
   const padLeft = 56
@@ -445,81 +575,96 @@ function AgentTrendChart({ dateAxis, sourceSeries }: { dateAxis: DateAxisPoint[]
   const innerHeight = chartHeight - padTop - padBottom
   const maximum = Math.max(...sourceSeries.flatMap((series) => series.points.map((point) => point.totalTokens)), 1)
   const tickValues = [1, 0.75, 0.5, 0.25, 0]
-  const payload = buildChartPayload(dateAxis, sourceSeries, maximum, chartWidth, chartHeight, padLeft, padRight, padTop, padBottom)
 
   return (
-    <section class="chart-panel">
+    <section class="chart-panel panel--chart" data-tab-panel="performance">
       <div class="panel-head panel-head--chart">
         <div>
           <p class="panel-kicker">Performance</p>
           <h2>Net token flow</h2>
-          <p class="panel-note">Hover the plot or use left and right arrow keys to inspect a single session day.</p>
+          <p class="panel-note">Hover the plot for day detail. Use source chips to hide lines and legend to isolate one line.</p>
         </div>
         <div class="chart-summary">
           <span>Window / mode</span>
-          <strong>28D / Daily</strong>
-          <small>
-            {dateAxis[0]?.shortLabel} to {dateAxis[dateAxis.length - 1]?.shortLabel}
+          <strong data-chart-range-label>
+            {rangeLabel(activeRange)} / Daily
+          </strong>
+          <small data-chart-range-window>
+            {dateAxis[0]?.shortLabel ?? 'No data'} to {dateAxis[dateAxis.length - 1]?.shortLabel ?? 'No data'}
           </small>
         </div>
       </div>
 
-      <ul class="chart-legend" aria-label="Chart legend">
+      <ul class="chart-legend" aria-label="Chart legend" data-chart-legend>
         {sourceSeries.map((series) => (
-          <li class="chart-legend__item" key={series.source}>
-            <span class="chart-legend__label">
-              <i class="chart-legend__dot" style={`background:${series.color}`} />
-              {series.label}
-            </span>
-            <strong>{formatCompact(series.totalTokens)}</strong>
+          <li key={series.source}>
+            <button aria-pressed="false" class="chart-legend__item" data-legend-source={series.source} type="button">
+              <span class="chart-legend__label">
+                <i class="chart-legend__dot" style={`background:${series.color}`} />
+                {series.label}
+              </span>
+              <strong>{formatCompact(series.totalTokens)}</strong>
+            </button>
           </li>
         ))}
       </ul>
 
       <div
-        aria-label="Interactive line chart showing token usage by agent across the last 28 days"
+        aria-label="Interactive line chart showing token usage by agent across time"
         class="chart-shell"
-        data-chart-root
-        data-chart-state={payload}
+        data-chart-root="true"
+        data-chart-height={String(chartHeight)}
+        data-chart-pad-bottom={String(padBottom)}
+        data-chart-pad-left={String(padLeft)}
+        data-chart-pad-right={String(padRight)}
+        data-chart-pad-top={String(padTop)}
+        data-chart-width={String(chartWidth)}
         role="img"
-        tabindex={0}
+        tabIndex={0}
       >
         <svg aria-hidden="true" class="trend-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`}>
-          {tickValues.map((ratio) => {
-            const y = padTop + (1 - ratio) * innerHeight
-            return (
-              <g key={ratio}>
-                <line class="trend-grid" x1={padLeft} x2={chartWidth - padRight} y1={y} y2={y} />
-                <text class="trend-y-label" text-anchor="end" x={padLeft - 10} y={y + 4}>
-                  {formatCompact(maximum * ratio)}
+          <g data-chart-grid>
+            {tickValues.map((ratio) => {
+              const y = padTop + (1 - ratio) * innerHeight
+              return (
+                <g key={ratio}>
+                  <line class="trend-grid" x1={padLeft} x2={chartWidth - padRight} y1={y} y2={y} />
+                  <text class="trend-y-label" text-anchor="end" x={padLeft - 10} y={y + 4}>
+                    {formatCompact(maximum * ratio)}
+                  </text>
+                </g>
+              )
+            })}
+          </g>
+
+          <g data-chart-x-axis>
+            {dateAxis.map((point, index) => {
+              if (index % Math.max(Math.floor(dateAxis.length / 4), 1) !== 0 && index !== dateAxis.length - 1) {
+                return null
+              }
+
+              const x = padLeft + (index / Math.max(dateAxis.length - 1, 1)) * innerWidth
+              const anchor = index === 0 ? 'start' : index === dateAxis.length - 1 ? 'end' : 'middle'
+
+              return (
+                <text class="trend-x-label" key={`${point.date}-${index}`} text-anchor={anchor} x={x} y={chartHeight - 12}>
+                  {point.shortLabel}
                 </text>
-              </g>
-            )
-          })}
+              )
+            })}
+          </g>
 
-          {dateAxis.map((point, index) => {
-            if (index % 7 !== 0 && index !== dateAxis.length - 1) {
-              return null
-            }
-
-            const x = padLeft + (index / Math.max(dateAxis.length - 1, 1)) * innerWidth
-            const anchor = index === 0 ? 'start' : index === dateAxis.length - 1 ? 'end' : 'middle'
-
-            return (
-              <text class="trend-x-label" key={`${point.date}-${index}`} text-anchor={anchor} x={x} y={chartHeight - 12}>
-                {point.shortLabel}
-              </text>
-            )
-          })}
-
-          {sourceSeries.map((series) => (
-            <path
-              class="trend-line"
-              d={buildLinePath(series.points, maximum, padLeft, padTop, innerWidth, innerHeight)}
-              key={series.source}
-              stroke={series.color}
-            />
-          ))}
+          <g data-chart-series-layer>
+            {sourceSeries.map((series) => (
+              <path
+                class="trend-line"
+                d={buildLinePath(series.points, maximum, padLeft, padTop, innerWidth, innerHeight)}
+                data-series-path={series.source}
+                key={series.source}
+                stroke={series.color}
+              />
+            ))}
+          </g>
 
           <line
             class="trend-crosshair"
@@ -530,17 +675,19 @@ function AgentTrendChart({ dateAxis, sourceSeries }: { dateAxis: DateAxisPoint[]
             y2={chartHeight - padBottom}
           />
 
-          {sourceSeries.map((series) => (
-            <circle
-              class="trend-marker"
-              cx={padLeft}
-              cy={chartHeight - padBottom}
-              data-chart-marker={series.source}
-              fill={series.color}
-              key={`${series.source}-marker`}
-              r="4.5"
-            />
-          ))}
+          <g data-chart-marker-layer>
+            {sourceSeries.map((series) => (
+              <circle
+                class="trend-marker"
+                cx={padLeft}
+                cy={chartHeight - padBottom}
+                data-chart-marker={series.source}
+                fill={series.color}
+                key={`${series.source}-marker`}
+                r="4.5"
+              />
+            ))}
+          </g>
 
           <rect data-chart-overlay fill="transparent" height={innerHeight} width={innerWidth} x={padLeft} y={padTop} />
         </svg>
@@ -559,18 +706,20 @@ function AgentTrendChart({ dateAxis, sourceSeries }: { dateAxis: DateAxisPoint[]
 }
 
 function SourceMixPanel({ sourceSeries, totalTokens }: { sourceSeries: SourceSeries[]; totalTokens: number }) {
+  const nonZeroSeries = sourceSeries.filter((series) => series.totalTokens > 0)
+
   return (
-    <section class="panel">
+    <section class="panel panel--source" data-tab-panel="performance mix">
       <div class="panel-head panel-head--compact">
         <div>
           <p class="panel-kicker">Weight distribution</p>
           <h2>Agent split</h2>
-          <p class="panel-note">Lifetime token share per source.</p>
+          <p class="panel-note">Current range token share per visible source.</p>
         </div>
       </div>
 
-      <ul class="source-list">
-        {sourceSeries.map((series) => {
+      <ul class="source-list" data-source-list>
+        {nonZeroSeries.map((series) => {
           const share = totalTokens === 0 ? 0 : series.totalTokens / totalTokens
           return (
             <li class="source-list__item" key={series.source}>
@@ -598,7 +747,7 @@ function ModelPanel({
   summary,
 }: {
   topModels: ModelRank[]
-  summary: DashboardData['summary']
+  summary: SummarySnapshot
 }) {
   const tokenMix = [
     { label: 'Input', value: summary.inputTokens },
@@ -610,41 +759,37 @@ function ModelPanel({
   const maxMixValue = Math.max(...tokenMix.map((item) => item.value), 1)
 
   return (
-    <section class="panel">
+    <section class="panel panel--models" data-tab-panel="performance models">
       <div class="panel-head panel-head--compact">
         <div>
           <p class="panel-kicker">Model matrix</p>
           <h2>Observed leaders</h2>
-          <p class="panel-note">Most active models plus the channel split beneath them.</p>
+          <p class="panel-note">Most active models for the current range and visible source set.</p>
         </div>
       </div>
 
-      {topModels.length > 0 ? (
-        <div class="table-shell">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Model</th>
-                <th>Tokens</th>
+      <div class="table-shell">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Model</th>
+              <th>Tokens</th>
+            </tr>
+          </thead>
+          <tbody data-model-table-body>
+            {topModels.map((model, index) => (
+              <tr key={`${model.label}-${index}`}>
+                <td>{String(index + 1).padStart(2, '0')}</td>
+                <td>{model.label}</td>
+                <td>{formatCompact(model.totalTokens)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {topModels.map((model, index) => (
-                <tr key={`${model.label}-${index}`}>
-                  <td>{String(index + 1).padStart(2, '0')}</td>
-                  <td>{model.label}</td>
-                  <td>{formatCompact(model.totalTokens)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p class="panel-empty">No model totals yet.</p>
-      )}
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      <div class="token-mix">
+      <div class="token-mix" data-token-mix>
         {tokenMix.map((item) => (
           <article key={item.label}>
             <div class="token-mix__head">
@@ -658,6 +803,15 @@ function ModelPanel({
         ))}
       </div>
     </section>
+  )
+}
+
+function DashboardStateScript({ state }: { state: DashboardClientState }) {
+  const serialized = JSON.stringify(state).replace(/</g, '\\u003c')
+  return (
+    <script id="dashboard-state" type="application/json">
+      {serialized}
+    </script>
   )
 }
 
@@ -709,123 +863,146 @@ export function DashboardPage({ data, authEnabled }: { data: DashboardData; auth
   const maxChannelValue = Math.max(...tokenChannels.map((item) => item.value), 1)
 
   return (
-    <main class="console">
-      <aside class="console__rail">
-        <div class="rail-topline">
-          <span>Signal routing</span>
-          <strong>{data.sourceSeries.length}</strong>
-        </div>
+    <>
+      <main class="console" data-dashboard-root="true">
+        <aside class="console__rail">
+          <div class="rail-topline">
+            <span>Signal routing</span>
+            <strong data-rail-count>{data.sourceSeries.length}</strong>
+          </div>
 
-        <RailSection note="live" title="Source selection">
-          <div class="agent-chip-grid">
-            {data.sourceSeries.map((series) => (
-              <article class="agent-chip" key={series.source} style={`--chip-color:${series.color}`}>
-                <span>{series.label}</span>
-                <strong>{formatCompact(series.totalTokens)}</strong>
+          <RailSection note="toggle visibility" title="Source selection">
+            <div class="agent-chip-grid" data-source-chip-grid>
+              {data.sourceSeries.map((series) => (
+                <button
+                  aria-pressed="true"
+                  class="agent-chip"
+                  data-source-toggle={series.source}
+                  key={series.source}
+                  style={`--chip-color:${series.color}`}
+                  type="button"
+                >
+                  <span>{series.label}</span>
+                  <strong>{formatCompact(series.totalTokens)}</strong>
+                </button>
+              ))}
+            </div>
+          </RailSection>
+
+          <RailSection note="selection aware" title="System state">
+            <div class="rail-stat-grid">
+              <article>
+                <span>Ingest auth</span>
+                <strong>{authEnabled ? 'ARMED' : 'LOCKED'}</strong>
               </article>
-            ))}
-          </div>
-        </RailSection>
-
-        <RailSection note="window" title="System state">
-          <div class="rail-stat-grid">
-            <article>
-              <span>Ingest auth</span>
-              <strong>{authEnabled ? 'ARMED' : 'LOCKED'}</strong>
-            </article>
-            <article>
-              <span>Active agents</span>
-              <strong>{data.summary.activeSources}</strong>
-            </article>
-            <article>
-              <span>First seen</span>
-              <strong>{formatMicroDate(data.summary.firstEventAt)}</strong>
-            </article>
-            <article>
-              <span>Last event</span>
-              <strong>{formatMicroDate(data.summary.lastEventAt)}</strong>
-            </article>
-          </div>
-        </RailSection>
-
-        <RailSection note="pressure" title="Cache profile">
-          <div class="signal-meter">
-            <span style={`width:${Math.max(data.summary.cacheRatio * 100, 2).toFixed(2)}%`} />
-          </div>
-          <div class="rail-line">
-            <span>Cache share</span>
-            <strong>{formatPercent(data.summary.cacheRatio)}</strong>
-          </div>
-          <div class="rail-line">
-            <span>Peak burst</span>
-            <strong>
-              {formatCompact(data.summary.peakDayTokens)} / {data.summary.peakDayLabel}
-            </strong>
-          </div>
-        </RailSection>
-
-        <RailSection note="channels" title="Token channels">
-          <div class="channel-list">
-            {tokenChannels.map((item) => (
-              <article class="channel-row" key={item.label}>
-                <div class="channel-row__head">
-                  <span>{item.label}</span>
-                  <strong>{formatCompact(item.value)}</strong>
-                </div>
-                <div class="channel-meter">
-                  <span style={`width:${((item.value / maxChannelValue) * 100).toFixed(2)}%`} />
-                </div>
+              <article>
+                <span>Active agents</span>
+                <strong data-summary-active-sources>{data.summary.activeSources}</strong>
               </article>
-            ))}
-          </div>
-        </RailSection>
-      </aside>
+              <article>
+                <span>First seen</span>
+                <strong data-summary-first-seen>{formatMicroDate(data.summary.firstEventAt)}</strong>
+              </article>
+              <article>
+                <span>Last event</span>
+                <strong data-summary-last-event>{formatMicroDate(data.summary.lastEventAt)}</strong>
+              </article>
+            </div>
+          </RailSection>
 
-      <section class="console__main">
-        <div class="topline">
-          <span>edge worker</span>
-          <span>{authEnabled ? 'ingest online' : 'auth missing'}</span>
-        </div>
+          <RailSection note="selection aware" title="Cache profile">
+            <div class="signal-meter">
+              <span data-cache-meter style={`width:${Math.max(data.summary.cacheRatio * 100, 2).toFixed(2)}%`} />
+            </div>
+            <div class="rail-line">
+              <span>Cache share</span>
+              <strong data-summary-cache-ratio>{formatPercent(data.summary.cacheRatio)}</strong>
+            </div>
+            <div class="rail-line">
+              <span>Peak burst</span>
+              <strong data-summary-peak-line>
+                {formatCompact(data.summary.peakDayTokens)} / {data.summary.peakDayLabel}
+              </strong>
+            </div>
+          </RailSection>
 
-        <header class="masthead">
-          <div>
-            <p class="masthead__eyebrow">agent token telemetry</p>
-            <h1>TUT MONITOR</h1>
-          </div>
-          <div class="masthead__meta">
-            <span>window: 28d</span>
-            <span>latest: {formatDate(data.summary.lastEventAt)}</span>
-          </div>
-        </header>
+          <RailSection note="selection aware" title="Token channels">
+            <div class="channel-list" data-channel-list>
+              {tokenChannels.map((item) => (
+                <article class="channel-row" key={item.label}>
+                  <div class="channel-row__head">
+                    <span>{item.label}</span>
+                    <strong>{formatCompact(item.value)}</strong>
+                  </div>
+                  <div class="channel-meter">
+                    <span style={`width:${((item.value / maxChannelValue) * 100).toFixed(2)}%`} />
+                  </div>
+                </article>
+              ))}
+            </div>
+          </RailSection>
+        </aside>
 
-        <section class="metric-strip">
-          <StatTile label="Total tokens" note="all observed" value={formatCompact(data.summary.totalTokens)} />
-          <StatTile label="Active agents" note="tracked lines" value={String(data.summary.activeSources)} />
-          <StatTile label="Peak burst" note={data.summary.peakDayLabel} value={formatCompact(data.summary.peakDayTokens)} />
-          <StatTile label="Cache share" note="read + write" value={formatPercent(data.summary.cacheRatio)} />
-          <StatTile label="Input lane" note="prompt volume" value={formatCompact(data.summary.inputTokens)} />
-          <StatTile label="Output lane" note="completion volume" value={formatCompact(data.summary.outputTokens)} />
+        <section class="console__main">
+          <div class="topline">
+            <span>edge worker</span>
+            <span>{authEnabled ? 'ingest online' : 'auth missing'}</span>
+          </div>
+
+          <header class="masthead">
+            <div>
+              <p class="masthead__eyebrow">agent token telemetry</p>
+              <h1>TUT MONITOR</h1>
+            </div>
+            <div class="masthead__meta">
+              <span data-range-meta>window: {rangeLabel(DEFAULT_RANGE)}</span>
+              <span data-latest-meta>latest: {formatDate(data.summary.lastEventAt)}</span>
+            </div>
+          </header>
+
+          <section class="metric-strip" data-metric-strip>
+            <StatTile metric="totalTokens" note="all visible" value={formatCompact(data.summary.totalTokens)} />
+            <StatTile metric="activeSources" note="tracked lines" value={String(data.summary.activeSources)} />
+            <StatTile metric="peakDayTokens" note={data.summary.peakDayLabel} value={formatCompact(data.summary.peakDayTokens)} />
+            <StatTile metric="cacheRatio" note="read + write" value={formatPercent(data.summary.cacheRatio)} />
+            <StatTile metric="inputTokens" note="prompt volume" value={formatCompact(data.summary.inputTokens)} />
+            <StatTile metric="outputTokens" note="completion volume" value={formatCompact(data.summary.outputTokens)} />
+          </section>
+
+          <section class="workspace">
+            <div class="workspace__header">
+              <div class="workspace-toolbar">
+                <nav class="workspace-tabs" aria-label="Dashboard modes">
+                  <button class="is-active" data-tab-key="performance" type="button">
+                    Performance
+                  </button>
+                  <button data-tab-key="mix" type="button">
+                    Mix
+                  </button>
+                  <button data-tab-key="models" type="button">
+                    Models
+                  </button>
+                </nav>
+                <RangeSwitch activeRange={DEFAULT_RANGE} />
+              </div>
+              <p class="workspace-caption" data-workspace-caption>
+                Daily token flow · hover chart for source detail
+              </p>
+            </div>
+
+            <div class="workspace-grid" data-active-tab={DEFAULT_TAB} data-workspace-grid>
+              <AgentTrendChart activeRange={DEFAULT_RANGE} dateAxis={data.dateAxis} sourceSeries={data.sourceSeries} />
+              <SourceMixPanel sourceSeries={data.sourceSeries} totalTokens={data.summary.totalTokens} />
+              <ModelPanel summary={data.summary} topModels={data.topModels} />
+            </div>
+          </section>
+
+          <footer class="console__footer" data-console-footer>
+            Data: Cloudflare D1 / usage_events · last event {formatDate(data.summary.lastEventAt)}
+          </footer>
         </section>
-
-        <section class="workspace">
-          <div class="workspace__header">
-            <nav class="workspace-tabs" aria-label="Dashboard modes">
-              <span class="is-active">Performance</span>
-              <span>Mix</span>
-              <span>Models</span>
-            </nav>
-            <p class="workspace-caption">Daily token flow · hover chart for source detail</p>
-          </div>
-
-          <div class="workspace-grid">
-            <AgentTrendChart dateAxis={data.dateAxis} sourceSeries={data.sourceSeries} />
-            <SourceMixPanel sourceSeries={data.sourceSeries} totalTokens={data.summary.totalTokens} />
-            <ModelPanel summary={data.summary} topModels={data.topModels} />
-          </div>
-        </section>
-
-        <footer class="console__footer">Data: Cloudflare D1 / usage_events · last event {formatDate(data.summary.lastEventAt)}</footer>
-      </section>
-    </main>
+      </main>
+      <DashboardStateScript state={data.clientState} />
+    </>
   )
 }
