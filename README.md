@@ -48,6 +48,23 @@ npx wrangler secret put INGEST_API_KEY
 
 ## 3. API
 
+## Dashboard
+
+首页 dashboard 现在支持明暗主题和中英文切换。
+
+- 默认主题：`light`
+- 可选主题：`?theme=light` 或 `?theme=dark`
+- 可选语言：`?lang=en` 或 `?lang=zh`
+
+示例：
+
+```text
+/
+/?lang=zh
+/?theme=dark
+/?lang=zh&theme=dark
+```
+
 ### POST `/api/v1/usage`
 
 写入 usage 事件，支持：

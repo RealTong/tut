@@ -1,6 +1,43 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Oswald:wght@500;600;700&display=swap');
 
 :root {
+  color-scheme: light;
+  --bg: oklch(0.962 0.01 100);
+  --bg-deep: oklch(0.986 0.006 96);
+  --bg-panel: rgba(250, 247, 239, 0.94);
+  --bg-panel-soft: rgba(246, 242, 233, 0.9);
+  --bg-surface: rgba(241, 236, 226, 0.84);
+  --line: rgba(74, 90, 76, 0.16);
+  --line-strong: rgba(74, 90, 76, 0.28);
+  --text: oklch(0.25 0.018 145);
+  --text-dim: oklch(0.4 0.014 145);
+  --text-faint: oklch(0.53 0.01 145);
+  --accent: oklch(0.17 0.018 145);
+  --shadow: 0 24px 80px rgba(83, 72, 48, 0.12);
+  --page-radial-a: rgba(180, 194, 156, 0.2);
+  --page-radial-b: rgba(196, 204, 178, 0.18);
+  --page-top: rgba(255, 255, 255, 0.92);
+  --page-bottom: rgba(235, 231, 221, 0.98);
+  --grid-line: rgba(83, 99, 84, 0.08);
+  --overlay-top: rgba(255, 255, 255, 0.56);
+  --overlay-rim: rgba(83, 72, 48, 0.08);
+  --scanline: rgba(83, 99, 84, 0.06);
+  --code-bg: rgba(255, 255, 255, 0.72);
+  --console-grad-left: rgba(248, 245, 237, 0.96);
+  --console-grad-right: rgba(239, 235, 225, 0.92);
+  --rail-grad-top: rgba(250, 247, 239, 0.96);
+  --rail-grad-bottom: rgba(238, 234, 224, 0.98);
+  --chart-shell-top: rgba(255, 255, 255, 0.72);
+  --chart-shell-bottom: rgba(236, 232, 223, 0.98);
+  --tooltip-bg: rgba(252, 249, 242, 0.97);
+  --tooltip-shadow: 0 20px 48px rgba(83, 72, 48, 0.18);
+  --chart-grid: rgba(83, 99, 84, 0.12);
+  --crosshair: rgba(83, 99, 84, 0.28);
+  --marker-shadow: rgba(83, 72, 48, 0.12);
+  --radius: 4px;
+}
+
+:root[data-theme='dark'] {
   color-scheme: dark;
   --bg: oklch(0.14 0.012 155);
   --bg-deep: oklch(0.115 0.01 155);
@@ -14,7 +51,26 @@
   --text-faint: oklch(0.61 0.008 145);
   --accent: oklch(0.95 0.01 145);
   --shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
-  --radius: 4px;
+  --page-radial-a: rgba(124, 150, 118, 0.1);
+  --page-radial-b: rgba(73, 96, 69, 0.16);
+  --page-top: rgba(10, 15, 10, 0.82);
+  --page-bottom: rgba(6, 9, 7, 0.96);
+  --grid-line: rgba(188, 201, 182, 0.03);
+  --overlay-top: rgba(255, 255, 255, 0.02);
+  --overlay-rim: rgba(0, 0, 0, 0.28);
+  --scanline: rgba(255, 255, 255, 0.02);
+  --code-bg: rgba(255, 255, 255, 0.04);
+  --console-grad-left: rgba(20, 32, 22, 0.78);
+  --console-grad-right: rgba(9, 14, 10, 0.88);
+  --rail-grad-top: rgba(18, 27, 18, 0.9);
+  --rail-grad-bottom: rgba(8, 12, 9, 0.98);
+  --chart-shell-top: rgba(7, 10, 8, 0.72);
+  --chart-shell-bottom: rgba(7, 11, 8, 0.94);
+  --tooltip-bg: rgba(10, 15, 11, 0.95);
+  --tooltip-shadow: 0 20px 48px rgba(0, 0, 0, 0.38);
+  --chart-grid: rgba(200, 212, 195, 0.08);
+  --crosshair: rgba(221, 229, 216, 0.38);
+  --marker-shadow: rgba(221, 229, 216, 0.16);
 }
 
 * {
@@ -27,9 +83,9 @@
 
 html {
   background:
-    radial-gradient(circle at 18% 12%, rgba(124, 150, 118, 0.1), transparent 28%),
-    radial-gradient(circle at 82% 20%, rgba(73, 96, 69, 0.16), transparent 34%),
-    linear-gradient(180deg, rgba(10, 15, 10, 0.82), rgba(6, 9, 7, 0.96)),
+    radial-gradient(circle at 18% 12%, var(--page-radial-a), transparent 28%),
+    radial-gradient(circle at 82% 20%, var(--page-radial-b), transparent 34%),
+    linear-gradient(180deg, var(--page-top), var(--page-bottom)),
     var(--bg-deep);
   color: var(--text);
   font-family: 'IBM Plex Sans', sans-serif;
@@ -41,8 +97,8 @@ body {
   min-height: 100svh;
   overflow: hidden;
   background:
-    linear-gradient(rgba(188, 201, 182, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(188, 201, 182, 0.03) 1px, transparent 1px);
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
   background-size: 56px 56px;
 }
 
@@ -56,12 +112,12 @@ body::after {
 
 body::before {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 28%),
-    radial-gradient(circle at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.28) 100%);
+    linear-gradient(180deg, var(--overlay-top), transparent 28%),
+    radial-gradient(circle at 50% 50%, transparent 55%, var(--overlay-rim) 100%);
 }
 
 body::after {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 2px);
+  background: linear-gradient(180deg, var(--scanline), transparent 2px);
   background-size: 100% 4px;
   opacity: 0.08;
 }
@@ -75,7 +131,7 @@ code {
   padding: 0.14rem 0.4rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--code-bg);
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.88em;
 }
@@ -90,7 +146,7 @@ code {
   grid-template-columns: minmax(18rem, 21rem) minmax(0, 1fr);
   border: 1px solid var(--line);
   background:
-    linear-gradient(90deg, rgba(20, 32, 22, 0.78), rgba(9, 14, 10, 0.88)),
+    linear-gradient(90deg, var(--console-grad-left), var(--console-grad-right)),
     var(--bg);
   box-shadow: var(--shadow);
   overflow: hidden;
@@ -104,7 +160,7 @@ code {
   padding: 1rem 0.95rem 1.1rem;
   border-right: 1px solid var(--line);
   background:
-    linear-gradient(180deg, rgba(18, 27, 18, 0.9), rgba(8, 12, 9, 0.98)),
+    linear-gradient(180deg, var(--rail-grad-top), var(--rail-grad-bottom)),
     var(--bg-panel);
   overflow: auto;
   scrollbar-width: thin;
@@ -357,10 +413,77 @@ code {
 
 .topline {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 1rem;
   color: var(--text-faint);
   font-size: 0.68rem;
+}
+
+.topline--empty {
+  margin-bottom: 1rem;
+}
+
+.topline__controls,
+.topline__status {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.topline__status {
+  justify-content: flex-end;
+}
+
+.toolbar-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.toolbar-switch > span {
+  color: var(--text-faint);
+  font: 500 0.64rem 'IBM Plex Mono', monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.toolbar-switch__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.18rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.toolbar-switch__group a {
+  min-width: 2.9rem;
+  padding: 0.38rem 0.56rem;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 1px);
+  color: var(--text-faint);
+  text-decoration: none;
+  text-align: center;
+  font: 500 0.68rem 'IBM Plex Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background-color 140ms ease;
+}
+
+.toolbar-switch__group a:hover {
+  color: var(--text-dim);
+}
+
+.toolbar-switch__group a.is-active {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--accent);
 }
 
 .masthead {
@@ -678,7 +801,7 @@ code {
   padding: 0.42rem 0.52rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.08);
   color: inherit;
   cursor: pointer;
   transition:
@@ -730,7 +853,7 @@ code {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background:
-    linear-gradient(180deg, rgba(7, 10, 8, 0.72), rgba(7, 11, 8, 0.94)),
+    linear-gradient(180deg, var(--chart-shell-top), var(--chart-shell-bottom)),
     var(--bg-panel);
   overflow: hidden;
   outline: none;
@@ -742,14 +865,14 @@ code {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(192, 205, 188, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(192, 205, 188, 0.04) 1px, transparent 1px);
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
   background-size: 56px 56px;
   opacity: 0.35;
 }
 
 .chart-shell:focus-visible {
-  box-shadow: inset 0 0 0 1px rgba(221, 229, 216, 0.14), 0 0 0 1px rgba(221, 229, 216, 0.12);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent), 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .trend-chart {
@@ -761,7 +884,7 @@ code {
 }
 
 .trend-grid {
-  stroke: rgba(200, 212, 195, 0.08);
+  stroke: var(--chart-grid);
   stroke-dasharray: 3 10;
 }
 
@@ -770,18 +893,18 @@ code {
   stroke-width: 2.35;
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: drop-shadow(0 0 10px rgba(221, 229, 216, 0.05));
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 12%, transparent));
 }
 
 .trend-y-label,
 .trend-x-label {
-  fill: rgba(165, 178, 160, 0.78);
+  fill: color-mix(in srgb, var(--text-faint) 88%, transparent);
   font-size: 11px;
   letter-spacing: 0.02em;
 }
 
 .trend-crosshair {
-  stroke: rgba(221, 229, 216, 0.38);
+  stroke: var(--crosshair);
   stroke-dasharray: 4 8;
   opacity: 0;
   transition: opacity 140ms ease;
@@ -790,7 +913,7 @@ code {
 .trend-marker {
   opacity: 0;
   transition: opacity 140ms ease;
-  filter: drop-shadow(0 0 12px rgba(221, 229, 216, 0.16));
+  filter: drop-shadow(0 0 12px var(--marker-shadow));
 }
 
 .trend-tooltip {
@@ -805,8 +928,8 @@ code {
   gap: 0.66rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: rgba(10, 15, 11, 0.95);
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.38);
+  background: var(--tooltip-bg);
+  box-shadow: var(--tooltip-shadow);
   pointer-events: none;
   transform: translate(-999px, -999px);
 }
@@ -981,7 +1104,7 @@ code {
   padding: 0.82rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .console,
@@ -1050,6 +1173,15 @@ code {
   .masthead {
     flex-direction: column;
   }
+
+  .topline {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .topline__status {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 680px), (max-height: 820px) {
@@ -1081,6 +1213,11 @@ code {
     width: 100%;
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .toolbar-switch {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .workspace-tabs {

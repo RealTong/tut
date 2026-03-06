@@ -1,3 +1,5 @@
+import { createDashboardFormatters, getDashboardText, type DashboardLocale } from './dashboard-i18n'
+
 type RangeKey = '7d' | '30d' | '1y' | 'all'
 type TabKey = 'performance' | 'mix' | 'models'
 
@@ -46,6 +48,7 @@ type SummarySnapshot = {
 }
 
 type DashboardState = {
+  locale: DashboardLocale
   defaultRange: RangeKey
   defaultTab: TabKey
   fullDateAxis: DateAxisPoint[]
@@ -70,39 +73,15 @@ type ViewState = {
   topModels: Array<{ label: string; totalTokens: number }>
 }
 
-const rangeOptions: Array<{ key: RangeKey; label: string; days: number | null }> = [
-  { key: '7d', label: '7D', days: 7 },
-  { key: '30d', label: '30D', days: 30 },
-  { key: '1y', label: '1Y', days: 365 },
-  { key: 'all', label: 'ALL', days: null },
+const rangeOptions: Array<{ key: RangeKey; days: number | null }> = [
+  { key: '7d', days: 7 },
+  { key: '30d', days: 30 },
+  { key: '1y', days: 365 },
+  { key: 'all', days: null },
 ]
 
-const tabCaptions: Record<TabKey, string> = {
-  performance: 'Daily token flow · hover chart for source detail',
-  mix: 'Visible source allocation · current range totals and share',
-  models: 'Model leaderboard · filtered by current range and visible sources',
-}
-
-const compactNumber = new Intl.NumberFormat('en-US', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-})
-
-const percentNumber = new Intl.NumberFormat('en-US', {
-  style: 'percent',
-  maximumFractionDigits: 1,
-})
-
-const longDate = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-})
-
-const microDate = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-})
+let currentText = getDashboardText('en')
+let currentFormatters = createDashboardFormatters('en')
 
 function initDashboard() {
   const root = document.querySelector<HTMLElement>('[data-dashboard-root]')
@@ -122,6 +101,9 @@ function initDashboard() {
   if (state.fullDateAxis.length === 0 || state.sourceSeries.length === 0) {
     return
   }
+
+  currentText = getDashboardText(state.locale)
+  currentFormatters = createDashboardFormatters(state.locale)
 
   createDashboardController(root, state).init()
 }
@@ -272,10 +254,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
         button.setAttribute('aria-pressed', visibleSources.has(series.source) ? 'true' : 'false')
         button.classList.toggle('is-hidden', !visibleSources.has(series.source))
         button.classList.toggle('is-focus', focusSource === series.source)
-        button.append(
-          element('span', '', series.label),
-          element('strong', '', compactNumber.format(series.totalTokens)),
-        )
+        button.append(element('span', '', series.label), element('strong', '', currentFormatters.formatCompact(series.totalTokens)))
         return button
       }),
     )
@@ -295,11 +274,11 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
 
   function renderSummary(summary: SummarySnapshot) {
     if (elements.activeSources) elements.activeSources.textContent = String(summary.activeSources)
-    if (elements.firstSeen) elements.firstSeen.textContent = formatMicroDate(summary.firstEventAt)
-    if (elements.lastEvent) elements.lastEvent.textContent = formatMicroDate(summary.lastEventAt)
-    if (elements.cacheRatio) elements.cacheRatio.textContent = percentNumber.format(summary.cacheRatio)
+    if (elements.firstSeen) elements.firstSeen.textContent = currentFormatters.formatMicroDate(summary.firstEventAt)
+    if (elements.lastEvent) elements.lastEvent.textContent = currentFormatters.formatMicroDate(summary.lastEventAt)
+    if (elements.cacheRatio) elements.cacheRatio.textContent = currentFormatters.formatPercent(summary.cacheRatio)
     if (elements.peakLine) {
-      elements.peakLine.textContent = `${compactNumber.format(summary.peakDayTokens)} / ${summary.peakDayLabel}`
+      elements.peakLine.textContent = `${currentFormatters.formatCompact(summary.peakDayTokens)} / ${summary.peakDayLabel}`
     }
     if (elements.cacheMeter) {
       elements.cacheMeter.style.width = `${Math.max(summary.cacheRatio * 100, 2).toFixed(2)}%`
@@ -310,10 +289,10 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
     if (!elements.channelList) return
 
     const items = [
-      { label: 'Input', value: summary.inputTokens },
-      { label: 'Output', value: summary.outputTokens },
-      { label: 'Cache read', value: summary.cacheReadTokens },
-      { label: 'Cache write', value: summary.cacheWriteTokens },
+      { label: currentText.labels.input, value: summary.inputTokens },
+      { label: currentText.labels.output, value: summary.outputTokens },
+      { label: currentText.labels.cacheRead, value: summary.cacheReadTokens },
+      { label: currentText.labels.cacheWrite, value: summary.cacheWriteTokens },
     ]
 
     const maximum = Math.max(...items.map((item) => item.value), 1)
@@ -322,7 +301,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
       ...items.map((item) => {
         const row = element('article', 'channel-row')
         const head = element('div', 'channel-row__head')
-        head.append(element('span', '', item.label), element('strong', '', compactNumber.format(item.value)))
+        head.append(element('span', '', item.label), element('strong', '', currentFormatters.formatCompact(item.value)))
 
         const meter = element('div', 'channel-meter')
         const fill = element('span')
@@ -337,12 +316,12 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
 
   function renderMetrics(summary: SummarySnapshot) {
     const metrics: Record<string, { value: string; note: string }> = {
-      totalTokens: { value: compactNumber.format(summary.totalTokens), note: 'all visible' },
-      activeSources: { value: String(summary.activeSources), note: 'tracked lines' },
-      peakDayTokens: { value: compactNumber.format(summary.peakDayTokens), note: summary.peakDayLabel },
-      cacheRatio: { value: percentNumber.format(summary.cacheRatio), note: 'read + write' },
-      inputTokens: { value: compactNumber.format(summary.inputTokens), note: 'prompt volume' },
-      outputTokens: { value: compactNumber.format(summary.outputTokens), note: 'completion volume' },
+      totalTokens: { value: currentFormatters.formatCompact(summary.totalTokens), note: currentText.metricNotes.allVisible },
+      activeSources: { value: String(summary.activeSources), note: currentText.metricNotes.trackedLines },
+      peakDayTokens: { value: currentFormatters.formatCompact(summary.peakDayTokens), note: summary.peakDayLabel },
+      cacheRatio: { value: currentFormatters.formatPercent(summary.cacheRatio), note: currentText.metricNotes.readWrite },
+      inputTokens: { value: currentFormatters.formatCompact(summary.inputTokens), note: currentText.metricNotes.promptVolume },
+      outputTokens: { value: currentFormatters.formatCompact(summary.outputTokens), note: currentText.metricNotes.completionVolume },
     }
 
     for (const tile of elements.metricStrip?.querySelectorAll<HTMLElement>('[data-metric-tile]') ?? []) {
@@ -360,25 +339,29 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
 
   function renderMeta(summary: SummarySnapshot, dateAxis: DateAxisPoint[]) {
     if (elements.rangeMeta) {
-      elements.rangeMeta.textContent = `window: ${rangeLabel(activeRange)}`
+      elements.rangeMeta.textContent = `${currentText.labels.window}: ${rangeLabel(activeRange)}`
     }
     if (elements.latestMeta) {
-      elements.latestMeta.textContent = `latest: ${formatLongDate(summary.lastEventAt)}`
+      elements.latestMeta.textContent = `${currentText.labels.latest}: ${currentFormatters.formatDate(summary.lastEventAt)}`
     }
     if (elements.workspaceCaption) {
-      elements.workspaceCaption.textContent = tabCaptions[activeTab]
+      elements.workspaceCaption.textContent = currentText.tabCaptions[activeTab]
     }
     if (elements.footer) {
       const windowLabel =
-        dateAxis.length > 0 ? `${dateAxis[0]?.shortLabel ?? 'No data'} to ${dateAxis[dateAxis.length - 1]?.shortLabel ?? 'No data'}` : 'No data'
-      elements.footer.textContent = `Data: Cloudflare D1 / usage_events · ${windowLabel}`
+        dateAxis.length > 0
+          ? `${dateAxis[0]?.shortLabel ?? currentText.noData} ${currentText.labels.rangeConnector} ${dateAxis[dateAxis.length - 1]?.shortLabel ?? currentText.noData}`
+          : currentText.noData
+      elements.footer.textContent = `${currentText.labels.dataSource} · ${windowLabel}`
     }
     if (elements.chartRangeLabel) {
-      elements.chartRangeLabel.textContent = `${rangeLabel(activeRange)} / Daily`
+      elements.chartRangeLabel.textContent = `${rangeLabel(activeRange)} / ${currentText.labels.daily}`
     }
     if (elements.chartRangeWindow) {
       elements.chartRangeWindow.textContent =
-        dateAxis.length > 0 ? `${dateAxis[0]?.shortLabel ?? 'No data'} to ${dateAxis[dateAxis.length - 1]?.shortLabel ?? 'No data'}` : 'No data'
+        dateAxis.length > 0
+          ? `${dateAxis[0]?.shortLabel ?? currentText.noData} ${currentText.labels.rangeConnector} ${dateAxis[dateAxis.length - 1]?.shortLabel ?? currentText.noData}`
+          : currentText.noData
     }
   }
 
@@ -418,7 +401,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
         const dot = element('i', 'source-list__dot')
         dot.style.backgroundColor = series.color
         label.append(dot, document.createTextNode(series.label))
-        head.append(label, element('strong', '', compactNumber.format(series.totalTokens)))
+        head.append(label, element('strong', '', currentFormatters.formatCompact(series.totalTokens)))
 
         const meter = element('div', 'source-list__meter')
         const fill = element('span', 'source-list__fill')
@@ -426,7 +409,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
         fill.style.backgroundColor = series.color
         meter.append(fill)
 
-        item.append(head, meter, element('span', 'source-list__share', percentNumber.format(share)))
+        item.append(head, meter, element('span', 'source-list__share', currentFormatters.formatPercent(share)))
         return item
       }),
     )
@@ -441,7 +424,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
               row.append(
                 element('td', '', String(index + 1).padStart(2, '0')),
                 element('td', '', model.label),
-                element('td', '', compactNumber.format(model.totalTokens)),
+                element('td', '', currentFormatters.formatCompact(model.totalTokens)),
               )
               return row
             })
@@ -451,10 +434,10 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
 
     if (elements.tokenMix) {
       const tokenMix = [
-        { label: 'Input', value: summary.inputTokens },
-        { label: 'Output', value: summary.outputTokens },
-        { label: 'Cache read', value: summary.cacheReadTokens },
-        { label: 'Cache write', value: summary.cacheWriteTokens },
+        { label: currentText.labels.input, value: summary.inputTokens },
+        { label: currentText.labels.output, value: summary.outputTokens },
+        { label: currentText.labels.cacheRead, value: summary.cacheReadTokens },
+        { label: currentText.labels.cacheWrite, value: summary.cacheWriteTokens },
       ]
       const maximum = Math.max(...tokenMix.map((item) => item.value), 1)
 
@@ -462,7 +445,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
         ...tokenMix.map((item) => {
           const article = element('article')
           const head = element('div', 'token-mix__head')
-          head.append(element('span', '', item.label), element('strong', '', compactNumber.format(item.value)))
+          head.append(element('span', '', item.label), element('strong', '', currentFormatters.formatCompact(item.value)))
           const meter = element('div', 'token-mix__meter')
           const fill = element('span', 'token-mix__fill')
           fill.style.width = `${((item.value / maximum) * 100).toFixed(2)}%`
@@ -556,7 +539,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
         dot.style.backgroundColor = series.color
         label.append(dot, document.createTextNode(series.label))
 
-        button.append(label, element('strong', '', compactNumber.format(series.totalTokens)))
+        button.append(label, element('strong', '', currentFormatters.formatCompact(series.totalTokens)))
         listItem.append(button)
         return listItem
       }),
@@ -621,8 +604,8 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
         marker.style.opacity = focusSource && focusSource !== series.source ? '0.25' : value > 0 ? '1' : '0.2'
       }
 
-      tooltipDate.textContent = formatLongDate(point.date)
-      tooltipTotal.textContent = compactNumber.format(total)
+      tooltipDate.textContent = currentFormatters.formatDate(point.date)
+      tooltipTotal.textContent = currentFormatters.formatCompact(total)
       tooltipSeries.replaceChildren(
         ...tooltipRows.map((series) => {
           const row = element('div', 'trend-tooltip__row')
@@ -635,7 +618,7 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
           swatch.style.backgroundColor = series.color
           label.append(swatch, document.createTextNode(series.label))
 
-          row.append(label, element('strong', '', compactNumber.format(series.points[activeIndex]?.totalTokens ?? 0)))
+          row.append(label, element('strong', '', currentFormatters.formatCompact(series.points[activeIndex]?.totalTokens ?? 0)))
           return row
         }),
       )
@@ -788,7 +771,7 @@ function computeSummary(sourceSeries: SourceSeries[]): SummarySnapshot {
     }
   }
 
-  let peakDayLabel = 'No data'
+  let peakDayLabel = currentText.noData
   let peakDayTokens = 0
 
   for (const series of sourceSeries) {
@@ -850,7 +833,7 @@ function buildGrid(maximum: number, geometry: ChartGeometry) {
         y1: String(y),
         y2: String(y),
       }),
-      svgText('trend-y-label', geometry.padLeft - 10, y + 4, compactNumber.format(maximum * ratio), 'end'),
+      svgText('trend-y-label', geometry.padLeft - 10, y + 4, currentFormatters.formatCompact(maximum * ratio), 'end'),
     ]
   })
 }
@@ -970,31 +953,13 @@ function emptyModelRow() {
   const row = document.createElement('tr')
   const cell = document.createElement('td')
   cell.colSpan = 3
-  cell.textContent = 'No model totals for the current selection.'
+  cell.textContent = currentText.models.empty
   row.append(cell)
   return row
 }
 
-function formatLongDate(value: string | null) {
-  if (!value) return 'No data'
-  const date = new Date(`${value}T00:00:00Z`)
-  if (Number.isNaN(date.valueOf())) {
-    return value
-  }
-  return longDate.format(date)
-}
-
-function formatMicroDate(value: string | null) {
-  if (!value) return 'No data'
-  const date = new Date(`${value}T00:00:00Z`)
-  if (Number.isNaN(date.valueOf())) {
-    return value
-  }
-  return microDate.format(date)
-}
-
 function rangeLabel(range: RangeKey) {
-  return rangeOptions.find((option) => option.key === range)?.label ?? range.toUpperCase()
+  return currentText.rangeLabels[range] ?? range.toUpperCase()
 }
 
 function clamp(value: number, minimum: number, maximum: number) {
