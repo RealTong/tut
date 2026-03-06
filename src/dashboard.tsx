@@ -825,12 +825,8 @@ function buildPreferenceLinks(locale: DashboardLocale, theme: DashboardTheme) {
 
   const buildHref = (nextLocale: DashboardLocale, nextTheme: DashboardTheme) => {
     const params = new URLSearchParams()
-    if (nextLocale !== 'en') {
-      params.set('lang', nextLocale)
-    }
-    if (nextTheme !== 'light') {
-      params.set('theme', nextTheme)
-    }
+    params.set('lang', nextLocale)
+    params.set('theme', nextTheme)
 
     const query = params.toString()
     return query ? `/?${query}` : '/'
