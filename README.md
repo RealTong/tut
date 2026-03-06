@@ -55,6 +55,7 @@ npx wrangler secret put INGEST_API_KEY
 - 默认主题：`light`
 - 可选主题：`?theme=light` 或 `?theme=dark`
 - 可选语言：`?lang=en` 或 `?lang=zh`
+- 主题与语言会写入 `localStorage`，下次访问会自动恢复
 
 示例：
 
