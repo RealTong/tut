@@ -37,6 +37,12 @@ npm run db:migrate:local
 npm run db:migrate:remote
 ```
 
+4. 配置写入认证密钥：
+
+```bash
+npx wrangler secret put INGEST_API_KEY
+```
+
 迁移文件：
 - [migrations/0001_init_usage_events.sql](/Users/realtong/Developer/tut/migrations/0001_init_usage_events.sql)
 
@@ -50,11 +56,16 @@ npm run db:migrate:remote
 - `{ "events": [...] }`
 - `{ "data": [...] }`
 
+认证方式：
+- `Authorization: Bearer <INGEST_API_KEY>`
+- 或 `x-api-key: <INGEST_API_KEY>`
+
 示例：
 
 ```bash
 curl -X POST http://127.0.0.1:8787/api/v1/usage \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <INGEST_API_KEY>' \
   -d '{
     "events": [
       {
@@ -125,6 +136,7 @@ npm run sync:local -- --dry-run
 正式上报：
 
 ```bash
+export TUT_API_TOKEN=<INGEST_API_KEY>
 npm run sync:local -- --endpoint https://<your-worker-domain>/api/v1/usage
 ```
 
