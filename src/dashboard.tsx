@@ -108,7 +108,7 @@ const rangeOptions: Array<{ key: RangeKey; days: number | null }> = [
 ]
 
 const sourceDisplayNames: Record<string, string> = {
-  claude: 'Claude',
+  claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
 }
