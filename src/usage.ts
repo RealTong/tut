@@ -31,6 +31,7 @@ export interface UsageFilters {
 }
 
 const MAX_TEXT_LENGTH = 256
+const SENSITIVE_METADATA_KEY_PATTERN = /^file_?path$/i
 
 const TOKEN_ALIASES = {
   input: ['input', 'inputTokens', 'input_tokens'],
@@ -276,15 +277,57 @@ function normalizeMetadata(value: unknown, index: number, errors: string[]): str
   }
 
   if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return stringifyMetadata(JSON.parse(trimmed), index, errors)
+      } catch {
+        return value
+      }
+    }
+
     return value
   }
 
+  return stringifyMetadata(value, index, errors)
+}
+
+function stringifyMetadata(value: unknown, index: number, errors: string[]): string | null {
   try {
-    return JSON.stringify(value)
+    const sanitized = sanitizeMetadataValue(value)
+    if (sanitized === undefined) {
+      return null
+    }
+
+    return JSON.stringify(sanitized)
   } catch {
     errors.push(`events[${index}].metadata must be JSON-serializable`)
     return null
   }
+}
+
+function sanitizeMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const sanitizedItems = value
+      .map((item) => sanitizeMetadataValue(item))
+      .filter((item) => item !== undefined)
+    return sanitizedItems.length > 0 ? sanitizedItems : undefined
+  }
+
+  if (value && typeof value === 'object') {
+    const sanitizedEntries = Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !SENSITIVE_METADATA_KEY_PATTERN.test(key))
+      .map(([key, item]) => [key, sanitizeMetadataValue(item)] as const)
+      .filter(([, item]) => item !== undefined)
+
+    if (sanitizedEntries.length === 0) {
+      return undefined
+    }
+
+    return Object.fromEntries(sanitizedEntries)
+  }
+
+  return value
 }
 
 function normalizeNonNegativeInt(value: unknown): number | null {
@@ -493,7 +536,8 @@ export function safeJsonParse(value: string | null): unknown {
   }
 
   try {
-    return JSON.parse(value)
+    const parsed = JSON.parse(value)
+    return sanitizeMetadataValue(parsed) ?? null
   } catch {
     return value
   }

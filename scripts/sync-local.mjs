@@ -1,12 +1,12 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
-import { createHash } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
-import { createReadStream } from 'node:fs'
-import { promises as fs } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import readline from 'node:readline'
+import { createHash } from 'bun:crypto'
+import { Database } from 'bun:sqlite'
+import { createReadStream } from 'bun:fs'
+import { promises as fs } from 'bun:fs'
+import os from 'bun:os'
+import path from 'bun:path'
+import readline from 'bun:readline'
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:8787/api/v1/usage'
 const DEFAULT_BATCH_SIZE = 200
@@ -129,6 +129,10 @@ Options:
 
 function sha1(input) {
   return createHash('sha1').update(input).digest('hex')
+}
+
+function buildFingerprint(value) {
+  return sha1(typeof value === 'string' ? value : JSON.stringify(value))
 }
 
 function clampToken(value) {
@@ -308,6 +312,10 @@ function makeEvent({
 }) {
   const cleanModel = typeof model === 'string' && model.trim() ? model.trim() : 'unknown'
   const cleanProvider = typeof provider === 'string' && provider.trim() ? provider.trim() : 'unknown'
+  const cleanMetadata =
+    metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? Object.fromEntries(Object.entries(metadata).filter(([, value]) => value !== undefined && value !== null && value !== ''))
+      : null
 
   return {
     eventId,
@@ -319,7 +327,7 @@ function makeEvent({
     cacheRead: clampToken(cacheRead),
     cacheWrite: clampToken(cacheWrite),
     occurredAt,
-    metadata,
+    metadata: cleanMetadata && Object.keys(cleanMetadata).length > 0 ? cleanMetadata : undefined,
   }
 }
 
@@ -344,10 +352,7 @@ async function collectClaudeEvents(cutoffIso) {
     const stream = createReadStream(filePath, { encoding: 'utf8' })
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
 
-    let lineNumber = 0
-
     for await (const line of rl) {
-      lineNumber += 1
       const trimmed = line.trim()
       if (!trimmed) continue
 
@@ -374,7 +379,7 @@ async function collectClaudeEvents(cutoffIso) {
 
       const msgId = typeof entry?.message?.id === 'string' ? entry.message.id : ''
       const reqId = typeof entry?.requestId === 'string' ? entry.requestId : ''
-      const fallbackId = sha1(`${filePath}:${lineNumber}:${trimmed}`)
+      const fallbackId = buildFingerprint(trimmed)
       const eventId = msgId && reqId ? `claude:${msgId}:${reqId}` : `claude:${fallbackId}`
 
       const event = makeEvent({
@@ -387,10 +392,6 @@ async function collectClaudeEvents(cutoffIso) {
         cacheWrite: usage.cache_creation_input_tokens,
         occurredAt,
         eventId,
-        metadata: {
-          filePath,
-          lineNumber,
-        },
       })
 
       const total = event.input + event.output + event.cacheRead + event.cacheWrite
@@ -491,12 +492,10 @@ async function collectCodexEvents(cutoffIso) {
       const stream = createReadStream(filePath, { encoding: 'utf8' })
       const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
 
-      let lineNumber = 0
       let currentModel = null
       let previousTotals = null
 
       for await (const line of rl) {
-        lineNumber += 1
         const trimmed = line.trim()
         if (!trimmed) continue
 
@@ -550,11 +549,7 @@ async function collectCodexEvents(cutoffIso) {
           cacheRead: usage.cacheRead,
           cacheWrite: usage.cacheWrite,
           occurredAt,
-          eventId: `codex:${sha1(`${filePath}:${lineNumber}:${trimmed}`)}`,
-          metadata: {
-            filePath,
-            lineNumber,
-          },
+          eventId: `codex:${buildFingerprint(trimmed)}`,
         })
 
         const total = event.input + event.output + event.cacheRead + event.cacheWrite
@@ -576,7 +571,7 @@ async function collectOpenCodeFromSqlite(dbPath, cutoffIso) {
 
   let db
   try {
-    db = new DatabaseSync(dbPath, { readOnly: true })
+    db = new Database(dbPath, { readOnly: true })
   } catch {
     return { events, stats, dedup }
   }
@@ -695,7 +690,6 @@ async function collectOpenCodeFromLegacyJson(rootDir, cutoffIso, dedupSet) {
         sessionId: payload.sessionID ?? null,
         agent: payload.mode ?? payload.agent ?? null,
         storage: 'json',
-        filePath,
       },
     })
 
