@@ -9,7 +9,7 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
     "db:migrate:local": "wrangler d1 migrations apply tut --local",
     "db:migrate:remote": "wrangler d1 migrations apply tut --remote",
-    "sync:local": "node scripts/sync-local.mjs"
+    "sync:local": "bun scripts/sync-local.mjs"
   },
   "dependencies": {
     "hono": "^4.12.5"

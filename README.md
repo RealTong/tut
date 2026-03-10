@@ -28,7 +28,7 @@ npm run dev
 npx wrangler d1 create tut
 ```
 
-2. 将返回的 `database_id` 写入 [wrangler.jsonc](/Users/realtong/Developer/tut/wrangler.jsonc) 的 `d1_databases[0].database_id`。
+2. 将返回的 `database_id` 写入 [wrangler.jsonc](./wrangler.jsonc) 的 `d1_databases[0].database_id`。
 
 3. 执行迁移：
 
@@ -44,7 +44,8 @@ npx wrangler secret put INGEST_API_KEY
 ```
 
 迁移文件：
-- [migrations/0001_init_usage_events.sql](/Users/realtong/Developer/tut/migrations/0001_init_usage_events.sql)
+- [migrations/0001_init_usage_events.sql](./migrations/0001_init_usage_events.sql)
+- [migrations/0002_redact_filepath_metadata.sql](./migrations/0002_redact_filepath_metadata.sql)
 
 ## 3. API
 
@@ -138,7 +139,7 @@ npm run deploy
 ## 5. 本地 Agent 数据同步脚本
 
 新增脚本：
-- [scripts/sync-local.mjs](/Users/realtong/Developer/tut/scripts/sync-local.mjs)
+- [scripts/sync-local.mjs](./scripts/sync-local.mjs)
 
 支持来源：
 - `claude`（`~/.claude/projects/**/*.jsonl`）
