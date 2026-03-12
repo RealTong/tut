@@ -97,7 +97,7 @@ export type DashboardData = {
 
 type DashboardFormatters = ReturnType<typeof createDashboardFormatters>
 
-const DEFAULT_RANGE: RangeKey = '30d'
+const DEFAULT_RANGE: RangeKey = 'all'
 const DEFAULT_TAB: TabKey = 'performance'
 
 const rangeOptions: Array<{ key: RangeKey; days: number | null }> = [
