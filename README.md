@@ -1,64 +1,88 @@
 # tut
 
-`tut` 是一个部署在 Cloudflare Workers 上的 token usage 追踪 API，适配多种 agent（如 Claude Code、Codex、OpenCode、Droid、Pi、Kimi CLI）。
+Chinese version: [README-ZH.md](./README-ZH.md)
 
-核心字段统一为：
-- `model`
-- `provider`
-- `source`
-- `input`
-- `output`
-- `cacheRead`
-- `cacheWrite`
+`tut` is a token usage tracking service for local AI coding agents. It runs on Cloudflare Workers, stores normalized events in D1, exposes query APIs, and ships with a built-in dashboard.
 
-并统一入库到 D1，提供多维查询 API。
+## Features
 
-## 1. 安装与启动
+- Normalize usage events into a shared schema: `model`, `provider`, `source`, `input`, `output`, `cacheRead`, `cacheWrite`
+- Ingest a single event, an array of events, or `{ "events": [...] }` / `{ "data": [...] }`
+- Query raw events, summaries, grouped breakdowns, and ranked dimensions
+- View usage trends in the built-in dashboard
+- Sync local agent logs with the bundled local sync script
+
+## Built-in Source Support
+
+The bundled `scripts/sync-local.mjs` currently supports:
+
+- `claude`: `~/.claude/projects/**/*.jsonl`
+- `codex`: `~/.codex/sessions/**/*.jsonl` and `~/.codex/archived_sessions/**/*.jsonl`
+- `opencode`: `~/.local/share/opencode/opencode.db` plus legacy JSON storage
+
+Not currently supported by the bundled sync script:
+
+- `droid`
+- `pi`
+- `kimi`
+
+The ingest API itself is generic. If another tool can send valid usage events to `POST /api/v1/usage`, `tut` can store and query them even without a built-in local parser.
+
+## Requirements
+
+- Node.js and npm for the Worker app
+- Bun for `npm run sync:local`
+- Cloudflare Wrangler
+- A Cloudflare D1 database
+
+## Quick Start
+
+1. Install dependencies:
 
 ```bash
 npm install
-npm run dev
 ```
 
-## 2. 配置 D1
-
-1. 创建数据库：
+2. Create a D1 database named `tut`:
 
 ```bash
 npx wrangler d1 create tut
 ```
 
-2. 将返回的 `database_id` 写入 [wrangler.jsonc](./wrangler.jsonc) 的 `d1_databases[0].database_id`。
+3. Put the returned `database_id` into `d1_databases[0].database_id` in [wrangler.jsonc](./wrangler.jsonc).
 
-3. 执行迁移：
+4. Apply migrations:
 
 ```bash
 npm run db:migrate:local
 npm run db:migrate:remote
 ```
 
-4. 配置写入认证密钥：
+If you only need local development, the local migration is enough. Run the remote migration before deploying.
+
+5. Configure the ingest API key:
 
 ```bash
 npx wrangler secret put INGEST_API_KEY
 ```
 
-迁移文件：
-- [migrations/0001_init_usage_events.sql](./migrations/0001_init_usage_events.sql)
-- [migrations/0002_redact_filepath_metadata.sql](./migrations/0002_redact_filepath_metadata.sql)
+6. Start the local dev server:
 
-## 3. API
+```bash
+npm run dev
+```
+
+If you use a different D1 database name, update the migration scripts in [package.json](./package.json) or run Wrangler manually.
 
 ## Dashboard
 
-首页 dashboard 现在支持明暗主题和中英文切换。
+The dashboard is served at `/`.
 
-- 默认主题：`light`
-- 可选主题：`?theme=light` 或 `?theme=dark`
-- 可选语言：`?lang=en` 或 `?lang=zh`
-- 主题与语言会写入 `localStorage`，下次访问会自动恢复
+- `?lang=en` or `?lang=zh`
+- `?theme=light` or `?theme=dark`
+- Theme and language preferences are persisted in `localStorage`
 
-示例：
+Examples:
 
 ```text
 /
@@ -67,19 +91,34 @@ npx wrangler secret put INGEST_API_KEY
 /?lang=zh&theme=dark
 ```
 
-### POST `/api/v1/usage`
+## API
 
-写入 usage 事件，支持：
-- 单对象
-- 数组
-- `{ "events": [...] }`
-- `{ "data": [...] }`
+### `GET /health`
 
-认证方式：
-- `Authorization: Bearer <INGEST_API_KEY>`
-- 或 `x-api-key: <INGEST_API_KEY>`
+Returns service health and whether `INGEST_API_KEY` is configured.
 
-示例：
+### `POST /api/v1/usage`
+
+Ingest usage events.
+
+- Accepts a single object, an array, `{ "events": [...] }`, or `{ "data": [...] }`
+- Maximum `1000` events per request
+- Authentication:
+  - `Authorization: Bearer <INGEST_API_KEY>`
+  - `x-api-key: <INGEST_API_KEY>`
+
+Event fields:
+
+- Required: `model`, `provider`, `source`
+- Token counters: `input`, `output`, `cacheRead`, `cacheWrite`
+- Optional: `eventId`, `occurredAt`, `metadata`
+
+Metadata notes:
+
+- `metadata` can be a JSON object, array, or JSON-encoded string
+- Sensitive filepath keys such as `filePath`, `filepath`, and `file_path` are stripped before storage
+
+Example:
 
 ```bash
 curl -X POST http://127.0.0.1:8787/api/v1/usage \
@@ -103,74 +142,78 @@ curl -X POST http://127.0.0.1:8787/api/v1/usage \
   }'
 ```
 
-### GET `/api/v1/usage`
+### `GET /api/v1/usage`
 
-分页明细查询。
+Returns paginated event details.
 
-常用参数：
-- `model`, `provider`, `source`（支持逗号分隔）
-- `from`, `to`（ISO 时间或 `YYYY-MM-DD`）
+Common query params:
+
+- `model`, `provider`, `source` as comma-separated filters
+- `from`, `to`
 - `limit`, `offset`
-- `sortBy=occurredAt|total|input|output|cacheRead|cacheWrite|createdAt`
 - `order=asc|desc`
+- `sortBy=occurredAt|total|input|output|cacheRead|cacheWrite|createdAt`
 
-### GET `/api/v1/usage/summary`
+### `GET /api/v1/usage/summary`
 
-总体统计（事件数、token 总量、时间范围），支持同样过滤参数。
+Returns aggregate totals and time bounds for the current filter set.
 
-### GET `/api/v1/usage/breakdown`
+### `GET /api/v1/usage/breakdown`
 
-分组聚合，参数：
-- `by=source,provider,model,date`（任意组合）
+Returns grouped aggregates.
+
+- `by=source,provider,model,date` in any combination
 - `sortBy=tokens|events|input|output|cacheRead|cacheWrite|source|provider|model|date`
 - `order=asc|desc`
 - `limit`, `offset`
 
-### GET `/api/v1/usage/dimensions`
+### `GET /api/v1/usage/dimensions`
 
-返回 source/provider/model 维度排名（事件数、token 数），支持同样过滤参数。
+Returns ranked totals for `source`, `provider`, and `model`.
 
-## 4. 部署
+## Local Sync
 
-```bash
-npm run deploy
-```
-
-## 5. 本地 Agent 数据同步脚本
-
-新增脚本：
-- [scripts/sync-local.mjs](./scripts/sync-local.mjs)
-
-支持来源：
-- `claude`（`~/.claude/projects/**/*.jsonl`）
-- `codex`（`~/.codex/sessions/**/*.jsonl` + `~/.codex/archived_sessions/**/*.jsonl`）
-- `opencode`（优先 `~/.local/share/opencode/opencode.db`，并补充 legacy JSON）
-
-先 dry-run 看解析结果：
+Dry run:
 
 ```bash
 npm run sync:local -- --dry-run
 ```
 
-正式上报：
+Upload to a deployed Worker:
 
 ```bash
 export TUT_API_TOKEN=<INGEST_API_KEY>
 npm run sync:local -- --endpoint https://<your-worker-domain>/api/v1/usage
 ```
 
-常用参数：
+Common flags:
+
 - `--sources claude,codex,opencode`
 - `--since 2026-03-01`
-- `--full`（忽略 checkpoint 全量扫描）
+- `--full`
 - `--batch-size 200`
 - `--state-file <path>`
-- `--token <token>`（或环境变量 `TUT_API_TOKEN`）
+- `--token <token>`
 
-Checkpoint 默认写入：`~/.config/tut/sync-state.json`
+Default checkpoint file:
 
-## 6. 构建检查
+- `~/.config/tut/sync-state.json`
+
+## Build and Deploy
+
+Build:
 
 ```bash
 npm run build
 ```
+
+Deploy:
+
+```bash
+npm run deploy
+```
+
+## Migrations
+
+- [migrations/0001_init_usage_events.sql](./migrations/0001_init_usage_events.sql)
+- [migrations/0002_redact_filepath_metadata.sql](./migrations/0002_redact_filepath_metadata.sql)
