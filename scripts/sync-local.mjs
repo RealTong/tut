@@ -10,7 +10,8 @@ import readline from 'bun:readline'
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:8787/api/v1/usage'
 const DEFAULT_BATCH_SIZE = 200
-const SUPPORTED_SOURCES = ['claude', 'codex', 'opencode']
+const SUPPORTED_SOURCES = ['claude', 'codex', 'opencode', 'hermes']
+const SUPPORTED_SOURCES_TEXT = SUPPORTED_SOURCES.join(',')
 
 function parseArgs(argv) {
   const args = {
@@ -102,7 +103,7 @@ function parseArgs(argv) {
   }
 
   if (args.sources.length === 0) {
-    throw new Error('No source selected. Use --sources claude,codex,opencode')
+    throw new Error(`No source selected. Use --sources ${SUPPORTED_SOURCES_TEXT}`)
   }
 
   return args
@@ -117,7 +118,7 @@ Usage:
 Options:
   --endpoint <url>       API endpoint (default: ${DEFAULT_ENDPOINT})
   --token <token>        Bearer token (or env TUT_API_TOKEN)
-  --sources <list>       claude,codex,opencode (default: all)
+  --sources <list>       ${SUPPORTED_SOURCES_TEXT} (default: all)
   --since <datetime>     only sync events after datetime (ISO or YYYY-MM-DD)
   --batch-size <n>       upload batch size (default: ${DEFAULT_BATCH_SIZE})
   --state-file <path>    checkpoint state path
@@ -257,6 +258,7 @@ async function loadState(statePath) {
       claude: { lastOccurredAt: null },
       codex: { lastOccurredAt: null },
       opencode: { lastOccurredAt: null },
+      hermes: { lastOccurredAt: null },
     },
   }
 
@@ -278,6 +280,9 @@ async function loadState(statePath) {
         },
         opencode: {
           lastOccurredAt: normalizeToIso(parsed.sources?.opencode?.lastOccurredAt || '') || null,
+        },
+        hermes: {
+          lastOccurredAt: normalizeToIso(parsed.sources?.hermes?.lastOccurredAt || '') || null,
         },
       },
     }
@@ -571,7 +576,7 @@ async function collectOpenCodeFromSqlite(dbPath, cutoffIso) {
 
   let db
   try {
-    db = new Database(dbPath, { readOnly: true })
+    db = new Database(dbPath, { readonly: true })
   } catch {
     return { events, stats, dedup }
   }
@@ -734,6 +739,111 @@ async function collectOpenCodeEvents(cutoffIso) {
   return { events: allEvents, stats: summary }
 }
 
+async function resolveHermesDbPath() {
+  const candidates = []
+  const hermesHome = typeof process.env.HERMES_HOME === 'string' ? process.env.HERMES_HOME.trim() : ''
+
+  if (hermesHome) {
+    candidates.push(path.join(hermesHome, 'state.db'))
+  }
+
+  candidates.push(path.join(os.homedir(), '.hermes', 'state.db'))
+
+  for (const candidate of [...new Set(candidates)]) {
+    if (await pathExists(candidate)) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+async function collectHermesEvents(cutoffIso) {
+  const dbPath = await resolveHermesDbPath()
+  const events = []
+  const stats = { dbFound: Boolean(dbPath), rows: 0, parsed: 0, skipped: 0 }
+
+  if (!dbPath) {
+    return { events, stats }
+  }
+
+  let db
+  try {
+    db = new Database(dbPath, { readonly: true })
+  } catch {
+    stats.skipped += 1
+    return { events, stats }
+  }
+
+  try {
+    const query = `
+      SELECT
+        id,
+        model,
+        billing_provider,
+        started_at,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens
+      FROM sessions
+      WHERE model IS NOT NULL
+        AND TRIM(model) != ''
+        AND (
+          COALESCE(input_tokens, 0) > 0 OR
+          COALESCE(output_tokens, 0) > 0 OR
+          COALESCE(cache_read_tokens, 0) > 0 OR
+          COALESCE(cache_write_tokens, 0) > 0
+        )
+    `
+
+    const rows = db.prepare(query).all()
+    stats.rows = rows.length
+
+    for (const row of rows) {
+      const sessionId = typeof row.id === 'string' && row.id.trim() ? row.id.trim() : null
+      const model = typeof row.model === 'string' && row.model.trim() ? row.model.trim() : null
+
+      if (!sessionId || !model) {
+        stats.skipped += 1
+        continue
+      }
+
+      const occurredAt = normalizeTimestamp(row.started_at, Date.now())
+      if (!shouldIncludeEvent(occurredAt, cutoffIso)) {
+        continue
+      }
+
+      const billingProvider =
+        typeof row.billing_provider === 'string' && row.billing_provider.trim() ? row.billing_provider.trim() : 'hermes'
+
+      const event = makeEvent({
+        source: 'hermes',
+        model,
+        provider: billingProvider,
+        input: row.input_tokens,
+        output: row.output_tokens,
+        cacheRead: row.cache_read_tokens,
+        cacheWrite: row.cache_write_tokens,
+        occurredAt,
+        eventId: `hermes:${sessionId}`,
+      })
+
+      const total = event.input + event.output + event.cacheRead + event.cacheWrite
+      if (total <= 0) continue
+
+      events.push(event)
+      stats.parsed += 1
+    }
+  } catch {
+    stats.skipped += 1
+  } finally {
+    db.close()
+  }
+
+  return { events, stats }
+}
+
 function chunkArray(items, size) {
   const chunks = []
   for (let i = 0; i < items.length; i += size) {
@@ -794,6 +904,7 @@ function groupBySource(events) {
     claude: [],
     codex: [],
     opencode: [],
+    hermes: [],
   }
 
   for (const event of events) {
@@ -862,6 +973,16 @@ async function main() {
       allEvents.push(...result.events)
       console.log(
         `[collect] source=opencode sqlite(parsed=${result.stats.sqlite.parsed}/${result.stats.sqlite.rows}) json(parsed=${result.stats.json.parsed}/${result.stats.json.files})`,
+      )
+      continue
+    }
+
+    if (source === 'hermes') {
+      const result = await collectHermesEvents(cutoffIso)
+      sourceResults.hermes = result
+      allEvents.push(...result.events)
+      console.log(
+        `[collect] source=hermes db=${result.stats.dbFound ? 'found' : 'missing'} rows=${result.stats.rows} parsed=${result.stats.parsed} skipped=${result.stats.skipped}`,
       )
     }
   }

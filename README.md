@@ -18,6 +18,7 @@ The bundled `scripts/sync-local.mjs` currently supports:
 
 - `claude`: `~/.claude/projects/**/*.jsonl`
 - `codex`: `~/.codex/sessions/**/*.jsonl` and `~/.codex/archived_sessions/**/*.jsonl`
+- `hermes`: `$HERMES_HOME/state.db` with fallback to `~/.hermes/state.db` (token fields only)
 - `opencode`: `~/.local/share/opencode/opencode.db` plus legacy JSON storage
 
 Not currently supported by the bundled sync script:
@@ -188,7 +189,7 @@ npm run sync:local -- --endpoint https://<your-worker-domain>/api/v1/usage
 
 Common flags:
 
-- `--sources claude,codex,opencode`
+- `--sources claude,codex,opencode,hermes`
 - `--since 2026-03-01`
 - `--full`
 - `--batch-size 200`
