@@ -18,6 +18,7 @@
 
 - `claude`：`~/.claude/projects/**/*.jsonl`
 - `codex`：`~/.codex/sessions/**/*.jsonl` 和 `~/.codex/archived_sessions/**/*.jsonl`
+- `hermes`：`$HERMES_HOME/state.db`，回退到 `~/.hermes/state.db`（仅统计 token 字段）
 - `opencode`：`~/.local/share/opencode/opencode.db` 以及 legacy JSON 存储
 
 当前自带同步脚本还不支持：
@@ -188,7 +189,7 @@ npm run sync:local -- --endpoint https://<your-worker-domain>/api/v1/usage
 
 常用参数：
 
-- `--sources claude,codex,opencode`
+- `--sources claude,codex,opencode,hermes`
 - `--since 2026-03-01`
 - `--full`
 - `--batch-size 200`

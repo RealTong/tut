@@ -110,12 +110,14 @@ const rangeOptions: Array<{ key: RangeKey; days: number | null }> = [
 const sourceDisplayNames: Record<string, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  hermes: 'Hermes Agent',
   opencode: 'OpenCode',
 }
 
 const sourceColors: Record<string, string> = {
   claude: '#d5c47d',
   codex: '#8abc8a',
+  hermes: '#76b7d8',
   opencode: '#dde5d8',
   kimi: '#bf9a63',
   droid: '#8ea89f',
