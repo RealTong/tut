@@ -10,7 +10,7 @@ import readline from 'bun:readline'
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:8787/api/v1/usage'
 const DEFAULT_BATCH_SIZE = 200
-const SUPPORTED_SOURCES = ['claude', 'codex', 'opencode', 'hermes']
+const SUPPORTED_SOURCES = ['claude', 'codex', 'opencode', 'hermes', 'grok', 'cursor-agent', 'pi', 'omp']
 const SUPPORTED_SOURCES_TEXT = SUPPORTED_SOURCES.join(',')
 
 function parseArgs(argv) {
@@ -113,7 +113,7 @@ function printHelp() {
   console.log(`tut local sync
 
 Usage:
-  node scripts/sync-local.mjs [options]
+  bun scripts/sync-local.mjs [options]
 
 Options:
   --endpoint <url>       API endpoint (default: ${DEFAULT_ENDPOINT})
@@ -132,11 +132,11 @@ function sha1(input) {
   return createHash('sha1').update(input).digest('hex')
 }
 
-function buildFingerprint(value) {
+export function buildFingerprint(value) {
   return sha1(typeof value === 'string' ? value : JSON.stringify(value))
 }
 
-function clampToken(value) {
+export function clampToken(value) {
   const numberValue = Number(value)
   if (!Number.isFinite(numberValue)) {
     return 0
@@ -197,7 +197,9 @@ function shouldIncludeEvent(eventIso, cutoffIso) {
   const eventMs = toMs(eventIso)
   const cutoffMs = toMs(cutoffIso)
   if (eventMs === null || cutoffMs === null) return true
-  return eventMs > cutoffMs
+  // Re-read the boundary: some harness timestamps only have second precision.
+  // Stable event IDs let the ingest API discard previously uploaded events.
+  return eventMs >= cutoffMs
 }
 
 async function pathExists(filePath) {
@@ -251,15 +253,10 @@ async function readJsonFile(filePath) {
   }
 }
 
-async function loadState(statePath) {
+export async function loadState(statePath) {
   const defaultState = {
     version: 1,
-    sources: {
-      claude: { lastOccurredAt: null },
-      codex: { lastOccurredAt: null },
-      opencode: { lastOccurredAt: null },
-      hermes: { lastOccurredAt: null },
-    },
+    sources: Object.fromEntries(SUPPORTED_SOURCES.map((source) => [source, { lastOccurredAt: null }])),
   }
 
   try {
@@ -271,20 +268,9 @@ async function loadState(statePath) {
 
     return {
       version: 1,
-      sources: {
-        claude: {
-          lastOccurredAt: normalizeToIso(parsed.sources?.claude?.lastOccurredAt || '') || null,
-        },
-        codex: {
-          lastOccurredAt: normalizeToIso(parsed.sources?.codex?.lastOccurredAt || '') || null,
-        },
-        opencode: {
-          lastOccurredAt: normalizeToIso(parsed.sources?.opencode?.lastOccurredAt || '') || null,
-        },
-        hermes: {
-          lastOccurredAt: normalizeToIso(parsed.sources?.hermes?.lastOccurredAt || '') || null,
-        },
-      },
+      sources: Object.fromEntries(SUPPORTED_SOURCES.map((source) => [source, {
+        lastOccurredAt: normalizeToIso(parsed.sources?.[source]?.lastOccurredAt || '') || null,
+      }])),
     }
   } catch {
     return defaultState
@@ -303,7 +289,7 @@ function getCutoff(source, args, state) {
   return state.sources[source]?.lastOccurredAt ?? null
 }
 
-function makeEvent({
+export function makeEvent({
   source,
   model,
   provider,
@@ -844,6 +830,141 @@ async function collectHermesEvents(cutoffIso) {
   return { events, stats }
 }
 
+async function* readJsonLines(filePath, stats) {
+  const stream = createReadStream(filePath, { encoding: 'utf8' })
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity })
+  try {
+    for await (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const entry = JSON.parse(line)
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) yield entry
+      } catch {
+        stats.skipped += 1
+      }
+    }
+  } finally {
+    lines.close()
+    stream.destroy()
+  }
+}
+
+export async function collectPiEvents(source, cutoffIso, rootDir) {
+  const agentDir = source === 'omp' ? process.env.TUT_OMP_AGENT_DIR : process.env.PI_CODING_AGENT_DIR
+  const root = rootDir ?? path.join(agentDir || path.join(os.homedir(), `.${source}`, 'agent'), 'sessions')
+  const events = []
+  const stats = { files: 0, parsed: 0, skipped: 0 }
+
+  for await (const filePath of walkFiles(root)) {
+    if (!filePath.endsWith('.jsonl')) continue
+    stats.files += 1
+    for await (const entry of readJsonLines(filePath, stats)) {
+      // OMP records side calls (e.g. automatic thinking selection) separately.
+      const message = entry.type === 'message' && entry.message?.role === 'assistant'
+        ? entry.message
+        : source === 'omp' && entry.type === 'model_usage' ? entry : null
+      if (!message?.usage || typeof message.model !== 'string') continue
+      const occurredAt = normalizeToIso(entry.timestamp) || normalizeTimestamp(message.timestamp, 0)
+      if (!shouldIncludeEvent(occurredAt, cutoffIso)) continue
+      const event = makeEvent({
+        source,
+        model: message.model,
+        provider: message.provider,
+        input: message.usage.input,
+        output: message.usage.output,
+        cacheRead: message.usage.cacheRead,
+        cacheWrite: message.usage.cacheWrite,
+        occurredAt,
+        // Forked sessions copy entries; their original usage must count once.
+        eventId: `${source}:${buildFingerprint([entry.id, occurredAt, message])}`,
+      })
+      if (event.input + event.output + event.cacheRead + event.cacheWrite <= 0) continue
+      events.push(event)
+      stats.parsed += 1
+    }
+  }
+  return { events, stats }
+}
+
+export async function collectGrokEvents(cutoffIso, rootDir) {
+  const root = rootDir ?? path.join(process.env.GROK_HOME || path.join(os.homedir(), '.grok'), 'sessions')
+  const events = []
+  const stats = { files: 0, parsed: 0, skipped: 0 }
+
+  for await (const filePath of walkFiles(root)) {
+    if (path.basename(filePath) !== 'updates.jsonl') continue
+    stats.files += 1
+    const sessionId = path.basename(path.dirname(filePath))
+    const summary = await readJsonFile(path.join(path.dirname(filePath), 'summary.json'))
+    for await (const entry of readJsonLines(filePath, stats)) {
+      const update = entry.params?.update
+      if (update?.sessionUpdate !== 'turn_completed' || !update.usage) continue
+      // Parent prompt totals already include subagent usage.
+      if (entry.params.sessionId && entry.params.sessionId !== sessionId) continue
+      const occurredAt = normalizeTimestamp(entry.timestamp, 0)
+      if (!shouldIncludeEvent(occurredAt, cutoffIso)) continue
+      const usage = update.usage
+      const models = usage.modelUsage && Object.keys(usage.modelUsage).length > 0
+        ? Object.entries(usage.modelUsage)
+        : [[summary?.current_model_id || 'unknown', usage]]
+      for (const [model, tokens] of models) {
+        if (!tokens || typeof tokens !== 'object') continue
+        const cacheRead = clampToken(tokens.cachedReadTokens)
+        const cacheWrite = clampToken(tokens.cacheCreationTokens)
+        const event = makeEvent({
+          source: 'grok',
+          model,
+          provider: 'xai',
+          // Grok's input bucket includes cached tokens; tut keeps them separate.
+          input: Math.max(clampToken(tokens.inputTokens) - cacheRead - cacheWrite, 0),
+          output: tokens.outputTokens,
+          cacheRead,
+          cacheWrite,
+          occurredAt,
+          eventId: `grok:${buildFingerprint([sessionId, update.prompt_id || buildFingerprint(entry), model])}`,
+        })
+        if (event.input + event.output + event.cacheRead + event.cacheWrite <= 0) continue
+        events.push(event)
+        stats.parsed += 1
+      }
+    }
+  }
+  return { events, stats }
+}
+
+export function cursorUsageDir() {
+  return process.env.TUT_CURSOR_USAGE_DIR || path.join(os.homedir(), '.config', 'tut', 'cursor-agent')
+}
+
+export async function collectCursorEvents(cutoffIso, rootDir = cursorUsageDir()) {
+  const events = []
+  const stats = { files: 0, parsed: 0, skipped: 0 }
+  for await (const filePath of walkFiles(rootDir)) {
+    if (!filePath.endsWith('.jsonl')) continue
+    stats.files += 1
+    for await (const entry of readJsonLines(filePath, stats)) {
+      const occurredAt = normalizeToIso(entry.occurredAt)
+      if (entry.source !== 'cursor-agent' || typeof entry.eventId !== 'string' || !entry.eventId.startsWith('cursor-agent:') || !occurredAt) continue
+      if (!shouldIncludeEvent(occurredAt, cutoffIso)) continue
+      const event = makeEvent({
+        source: 'cursor-agent',
+        provider: 'cursor',
+        model: entry.model,
+        input: entry.input,
+        output: entry.output,
+        cacheRead: entry.cacheRead,
+        cacheWrite: entry.cacheWrite,
+        eventId: entry.eventId,
+        occurredAt,
+      })
+      if (event.input + event.output + event.cacheRead + event.cacheWrite <= 0) continue
+      events.push(event)
+      stats.parsed += 1
+    }
+  }
+  return { events, stats }
+}
+
 function chunkArray(items, size) {
   const chunks = []
   for (let i = 0; i < items.length; i += size) {
@@ -900,12 +1021,7 @@ async function uploadEvents(events, args) {
 }
 
 function groupBySource(events) {
-  const grouped = {
-    claude: [],
-    codex: [],
-    opencode: [],
-    hermes: [],
-  }
+  const grouped = Object.fromEntries(SUPPORTED_SOURCES.map((source) => [source, []]))
 
   for (const event of events) {
     if (event.source in grouped) {
@@ -984,6 +1100,18 @@ async function main() {
       console.log(
         `[collect] source=hermes db=${result.stats.dbFound ? 'found' : 'missing'} rows=${result.stats.rows} parsed=${result.stats.parsed} skipped=${result.stats.skipped}`,
       )
+      continue
+    }
+
+    if (['grok', 'cursor-agent', 'pi', 'omp'].includes(source)) {
+      const result = source === 'grok' ? await collectGrokEvents(cutoffIso)
+        : source === 'cursor-agent' ? await collectCursorEvents(cutoffIso)
+        : await collectPiEvents(source, cutoffIso)
+      allEvents.push(...result.events)
+      console.log(`[collect] source=${source} files=${result.stats.files} parsed=${result.stats.parsed} skipped=${result.stats.skipped}`)
+      if (source === 'cursor-agent' && result.stats.files === 0) {
+        console.log('[collect] Cursor Agent requires the usage hook: bun scripts/cursor-hook.mjs --install')
+      }
     }
   }
 
@@ -1019,7 +1147,9 @@ async function main() {
   console.log(`[done] state saved to ${args.stateFile}`)
 }
 
-main().catch((error) => {
-  console.error(`[error] ${error instanceof Error ? error.message : String(error)}`)
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(`[error] ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  })
+}

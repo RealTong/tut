@@ -1,4 +1,5 @@
 import { createDashboardFormatters, getDashboardText, type DashboardLocale } from './dashboard-i18n'
+import { sourceLogo, sourceMonogram } from './source-logos'
 
 type RangeKey = '7d' | '30d' | '1y' | 'all'
 type TabKey = 'performance' | 'mix' | 'models'
@@ -254,7 +255,25 @@ function createDashboardController(root: HTMLElement, state: DashboardState) {
         button.setAttribute('aria-pressed', visibleSources.has(series.source) ? 'true' : 'false')
         button.classList.toggle('is-hidden', !visibleSources.has(series.source))
         button.classList.toggle('is-focus', focusSource === series.source)
-        button.append(element('span', '', series.label), element('strong', '', currentFormatters.formatCompact(series.totalTokens)))
+        const label = element('span', 'agent-chip__label', '')
+        const icon = element('span', 'agent-chip__icon', '')
+        icon.setAttribute('aria-hidden', 'true')
+        if (sourceLogo(series.source, 'light')) {
+          for (const theme of ['light', 'dark'] as const) {
+            const logo = document.createElement('img')
+            logo.className = `agent-chip__logo agent-chip__logo--${theme}`
+            logo.src = sourceLogo(series.source, theme)!
+            logo.alt = ''
+            logo.width = 20
+            logo.height = 20
+            icon.append(logo)
+          }
+        } else {
+          icon.classList.add('agent-chip__monogram')
+          icon.textContent = sourceMonogram(series.source)
+        }
+        label.append(icon, element('span', '', series.label))
+        button.append(label, element('strong', '', currentFormatters.formatCompact(series.totalTokens)))
         return button
       }),
     )

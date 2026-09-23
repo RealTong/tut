@@ -6,6 +6,7 @@ import {
   type DashboardTheme,
 } from './dashboard-i18n'
 import type { D1DatabaseLike } from './usage'
+import { sourceLogo, sourceMonogram } from './source-logos'
 
 type RangeKey = '7d' | '30d' | '1y' | 'all'
 type TabKey = 'performance' | 'mix' | 'models'
@@ -112,6 +113,12 @@ const sourceDisplayNames: Record<string, string> = {
   codex: 'Codex',
   hermes: 'Hermes Agent',
   opencode: 'OpenCode',
+  grok: 'Grok Build',
+  'grok-build': 'Grok Build',
+  'cursor-agent': 'Cursor Agent',
+  cursor: 'Cursor Agent',
+  pi: 'pi',
+  omp: 'Oh My Pi',
 }
 
 const sourceColors: Record<string, string> = {
@@ -119,6 +126,12 @@ const sourceColors: Record<string, string> = {
   codex: '#8abc8a',
   hermes: '#76b7d8',
   opencode: '#dde5d8',
+  grok: '#b1bac9',
+  'grok-build': '#b1bac9',
+  'cursor-agent': '#b3a6d9',
+  cursor: '#b3a6d9',
+  pi: '#dfa17b',
+  omp: '#c591af',
   kimi: '#bf9a63',
   droid: '#8ea89f',
 }
@@ -948,7 +961,17 @@ export function DashboardPage({
                   style={`--chip-color:${series.color}`}
                   type="button"
                 >
-                  <span>{series.label}</span>
+                  <span class="agent-chip__label">
+                    {sourceLogo(series.source, 'light') ? (
+                      <span aria-hidden="true" class="agent-chip__icon">
+                        <img alt="" class="agent-chip__logo agent-chip__logo--light" height="20" src={sourceLogo(series.source, 'light')!} width="20" />
+                        <img alt="" class="agent-chip__logo agent-chip__logo--dark" height="20" src={sourceLogo(series.source, 'dark')!} width="20" />
+                      </span>
+                    ) : (
+                      <span aria-hidden="true" class="agent-chip__icon agent-chip__monogram">{sourceMonogram(series.source)}</span>
+                    )}
+                    <span>{series.label}</span>
+                  </span>
                   <strong>{formatters.formatCompact(series.totalTokens)}</strong>
                 </button>
               ))}

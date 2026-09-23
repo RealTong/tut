@@ -306,6 +306,48 @@ code {
 .agent-chip strong {
   color: color-mix(in srgb, var(--chip-color) 72%, var(--accent));
   font-size: 0.76rem;
+  flex-shrink: 0;
+}
+
+.agent-chip__label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.agent-chip__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.agent-chip__logo {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.agent-chip__logo--dark {
+  display: none;
+}
+
+:root[data-theme='dark'] .agent-chip__logo--light {
+  display: none;
+}
+
+:root[data-theme='dark'] .agent-chip__logo--dark {
+  display: block;
+}
+
+.agent-chip .agent-chip__monogram {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.65rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
 }
 
 .agent-chip:hover {

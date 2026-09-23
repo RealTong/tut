@@ -20,14 +20,31 @@ The bundled `scripts/sync-local.mjs` currently supports:
 - `codex`: `~/.codex/sessions/**/*.jsonl` and `~/.codex/archived_sessions/**/*.jsonl`
 - `hermes`: `$HERMES_HOME/state.db` with fallback to `~/.hermes/state.db` (token fields only)
 - `opencode`: `~/.local/share/opencode/opencode.db` plus legacy JSON storage
+- `grok` (Grok Build): `$GROK_HOME/sessions/**/updates.jsonl`, defaulting to `~/.grok/sessions/`; completed prompt usage, split by model
+- `pi`: `$PI_CODING_AGENT_DIR/sessions/**/*.jsonl`, defaulting to `~/.pi/agent/sessions/`
+- `omp` (Oh My Pi): `~/.omp/agent/sessions/**/*.jsonl`; set `TUT_OMP_AGENT_DIR` for a custom agent directory (includes standalone `model_usage` entries)
+- `cursor-agent`: usage recorded by the Cursor hook below, in `~/.config/tut/cursor-agent/*.jsonl` (override with `TUT_CURSOR_USAGE_DIR` in both the hook and sync environment)
 
 Not currently supported by the bundled sync script:
 
 - `droid`
-- `pi`
 - `kimi`
 
 The ingest API itself is generic. If another tool can send valid usage events to `POST /api/v1/usage`, `tut` can store and query them even without a built-in local parser.
+
+The source selector uses locally bundled [SVGL](https://svgl.app) logos with light/dark variants. Sources missing from SVGL (currently Hermes, pi and Oh My Pi) use text monograms.
+
+### Cursor Agent setup
+
+Install the usage hook once, then restart Cursor Agent:
+
+```bash
+bun run cursor:install-hook
+```
+
+This adds an `afterAgentResponse` command to `~/.cursor/hooks.json`, preserving existing hooks. Keep this checkout at its installed path. The hook records only model, token counts, timestamp and a hashed event ID; response text, workspace paths and credentials are never stored or uploaded. It does not make network requests; `sync:local` uploads the recorded events later.
+
+Cursor's chat `store.db` does not provide reliable historical billing usage. Collection starts after hook installation and requires a CLI version that supplies `input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_write_tokens` in `afterAgentResponse` (verified with 2026.08.11). Responses without usage are skipped, not estimated. See [Cursor hooks](https://cursor.com/docs/hooks).
 
 ## Requirements
 
@@ -189,7 +206,7 @@ npm run sync:local -- --endpoint https://<your-worker-domain>/api/v1/usage
 
 Common flags:
 
-- `--sources claude,codex,opencode,hermes`
+- `--sources claude,codex,opencode,hermes,grok,cursor-agent,pi,omp` (all by default)
 - `--since 2026-03-01`
 - `--full`
 - `--batch-size 200`
@@ -199,6 +216,10 @@ Common flags:
 Default checkpoint file:
 
 - `~/.config/tut/sync-state.json`
+
+The checkpoint boundary is re-read to handle timestamps with second precision; stable event IDs let the API deduplicate repeat uploads. Old checkpoint files automatically gain the new sources.
+
+Run parser and hook regression checks with `bun test`.
 
 ## Build and Deploy
 

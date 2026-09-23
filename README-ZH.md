@@ -20,14 +20,31 @@
 - `codex`：`~/.codex/sessions/**/*.jsonl` 和 `~/.codex/archived_sessions/**/*.jsonl`
 - `hermes`：`$HERMES_HOME/state.db`，回退到 `~/.hermes/state.db`（仅统计 token 字段）
 - `opencode`：`~/.local/share/opencode/opencode.db` 以及 legacy JSON 存储
+- `grok`（Grok Build）：`$GROK_HOME/sessions/**/updates.jsonl`，默认 `~/.grok/sessions/`；按完成的 prompt 读取用量并按模型拆分
+- `pi`：`$PI_CODING_AGENT_DIR/sessions/**/*.jsonl`，默认 `~/.pi/agent/sessions/`
+- `omp`（Oh My Pi）：`~/.omp/agent/sessions/**/*.jsonl`；自定义 agent 目录可设置 `TUT_OMP_AGENT_DIR`，也统计独立的 `model_usage` 记录
+- `cursor-agent`：下方 Cursor hook 记录的 `~/.config/tut/cursor-agent/*.jsonl`；可在 hook 和同步进程的环境中同时设置 `TUT_CURSOR_USAGE_DIR` 更换目录
 
 当前自带同步脚本还不支持：
 
 - `droid`
-- `pi`
 - `kimi`
 
 不过写入 API 本身是通用的。只要其他工具能向 `POST /api/v1/usage` 发送合法事件，`tut` 就可以存储和查询这些数据，即使仓库里还没有为该工具内置本地解析器。
+
+来源选择使用本地保存的 [SVGL](https://svgl.app) logo，支持明暗主题。SVGL 暂未收录的来源（目前为 Hermes、pi、Oh My Pi）使用文字标识。
+
+### Cursor Agent 配置
+
+安装一次用量 hook，然后重启 Cursor Agent：
+
+```bash
+bun run cursor:install-hook
+```
+
+该命令向 `~/.cursor/hooks.json` 添加 `afterAgentResponse` 命令，并保留已有 hooks。安装后请保留项目当前路径。hook 只保存模型、token 数、时间和哈希事件 ID，不保存或上传回复正文、工作区路径、凭据。hook 本身不联网，之后由 `sync:local` 上传用量。
+
+Cursor 的聊天 `store.db` 不提供可靠的历史计费用量，因此从 hook 安装后开始采集。CLI 版本需要在 `afterAgentResponse` 中提供 `input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_write_tokens`（已核对 2026.08.11 版本）。缺少用量字段的回复会跳过，不估算 token。参见 [Cursor hooks 文档](https://cursor.com/docs/hooks)。
 
 ## 环境要求
 
@@ -189,7 +206,7 @@ npm run sync:local -- --endpoint https://<your-worker-domain>/api/v1/usage
 
 常用参数：
 
-- `--sources claude,codex,opencode,hermes`
+- `--sources claude,codex,opencode,hermes,grok,cursor-agent,pi,omp`（默认全部）
 - `--since 2026-03-01`
 - `--full`
 - `--batch-size 200`
@@ -199,6 +216,10 @@ npm run sync:local -- --endpoint https://<your-worker-domain>/api/v1/usage
 默认 checkpoint 文件：
 
 - `~/.config/tut/sync-state.json`
+
+同步会重新读取 checkpoint 边界时间，避免漏掉秒级时间戳下的新增事件；服务端按稳定事件 ID 去重。旧 checkpoint 文件会自动补齐新增来源。
+
+运行解析器和 hook 回归检查：`bun test`。
 
 ## 构建与部署
 
